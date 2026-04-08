@@ -219,15 +219,6 @@ scenarioStateReasonText(string scenarioState, bool failureRaw, bool manipulation
      scenarioState == "WARNING" ? (manipulationRisk ? sideName + " scenario under warning: manipulation sweep active, reclaim/absorption still missing" : correctionDestructive ? sideName + " scenario under warning: destructive pullback in rolling background" : approachExhausted ? sideName + " scenario under warning: approach/exhaustion in rolling background" : sideName + " scenario under warning pressure") :
      sideName + " scenario stable / normal noise"
 
-stateSourceText(string execLbl, bool setupLive, string setupSide, string setupType, string setupReason, bool watchTrend, bool watchReaction, bool accelStrong, string accelText, bool cascadeStrong, string cascadeText, bool impulseStrong, string impulseText) =>
-    setupLive ? execLbl + " SETUP " + setupSide + " | " + setupType + " | " + setupReason :
-     watchTrend ? execLbl + " WATCH " + setupSide + " | TREND" :
-     watchReaction ? execLbl + " WATCH " + setupSide + " | REACTION" :
-     accelStrong ? execLbl + " STRUCTURE | " + accelText :
-     cascadeStrong ? execLbl + " STRUCTURE | " + cascadeText :
-     impulseStrong ? execLbl + " STRUCTURE | " + impulseText :
-     "Brak"
-
 pickSideString(string side, string longVal, string shortVal, string noneVal) =>
     side == "LONG" ? longVal : side == "SHORT" ? shortVal : noneVal
 
@@ -656,7 +647,6 @@ bearPulseFromPack(bool _trend, bool _reaction, bool _cont, bool _oppFail, bool _
 string execTf = profile == "Chart TF" ? timeframe.period : profile == "1m" ? "1" : profile == "5m" ? "5" : "15"
 bool tfSupported = timeframe.period == "1" or timeframe.period == "5" or timeframe.period == "15"
 bool tfOk = execTf == timeframe.period and tfSupported
-string execLabel = execTf + "m"
 
 string ctx1Tf = execTf == "1" ? "5" : execTf == "5" ? "15" : "60"
 string ctx2Tf = execTf == "1" ? "15" : execTf == "5" ? "60" : "240"
