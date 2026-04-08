@@ -1,0 +1,3267 @@
+//@version=6
+indicator("VSA Reaction Engine v4.1", shorttitle="VSA 4.1", overlay=true, max_boxes_count=40, max_labels_count=170, max_lines_count=140)
+
+// =====================================================
+// INPUTS
+// =====================================================
+profile             = input.string("Chart TF", "Profil wykonawczy", options=["Chart TF", "1m", "5m", "15m"])
+viewMode            = input.string("Minimal", "Widok", options=["Minimal", "Audit"])
+showDashboard       = input.bool(true, "Pokaz dashboard")
+showZones           = input.bool(true, "Pokaz strefy VSA")
+showLiquidity       = input.bool(true, "Pokaz LQ")
+showLevels          = input.bool(true, "Pokaz WEJDZ / SL / TP")
+showStateLabel      = input.bool(true, "Pokaz etykiete stanu")
+showLevelLabels     = input.bool(true, "Pokaz etykiety WEJDZ / SL / TP")
+showReasons         = input.bool(true, "Pokaz powod stanu")
+htfMode             = input.string("Confirmed", "HTF bias mode", options=["Confirmed", "Live"])
+
+pivotLen            = input.int(3, "Pivot length", minval=2, maxval=10)
+atrLen              = input.int(14, "ATR length", minval=5, maxval=50)
+segmentMaxLen       = input.int(18, "Max dlugosc segmentu VSA", minval=6, maxval=40)
+zoneLifeBars        = input.int(16, "Waznosc strefy VSA (bary)", minval=4, maxval=120)
+zoneBreakAtr        = input.float(0.05, "Min wybicie zanegowania strefy (ATR)", minval=0.01, maxval=0.50, step=0.01)
+minSweepPenAtr      = input.float(0.08, "Min penetracja sweepu (ATR)", minval=0.0, maxval=1.0, step=0.01)
+sweepCooldownBars   = input.int(4, "Cooldown LQ (bary)", minval=1, maxval=50)
+microLen            = input.int(4, "Dlugosc mikrostruktury", minval=2, maxval=10)
+minSideGap          = input.int(5, "Min przewaga strony L/S", minval=0, maxval=30)
+
+watchQ              = input.int(42, "Min jakosc WATCH", minval=20, maxval=95)
+setupQ              = input.int(52, "Min jakosc SETUP", minval=20, maxval=95)
+setupI              = input.int(28, "Min impuls SETUP", minval=10, maxval=95)
+entryQ              = input.int(64, "Min jakosc ENTRY", minval=20, maxval=95)
+entryI              = input.int(46, "Min impuls ENTRY", minval=10, maxval=95)
+
+expiryBars          = input.int(10, "Maks czas pozycji (bary)", minval=2, maxval=100)
+tempoBars           = input.int(3, "Bars do warunku tempa", minval=1, maxval=20)
+tempoMinR           = input.float(0.35, "Min ruch po wejściu do utrzymania (R)", minval=0.10, maxval=3.00, step=0.05)
+trailLen            = input.int(3, "Dlugosc traila strukturalnego", minval=2, maxval=10)
+
+// =====================================================
+// EXPERT PARAMS — VSA CORE
+// =====================================================
+grpVsaBars          = "Expert VSA — Bar / Close"
+grpVsaVol           = "Expert VSA — Volume"
+grpVsaBg            = "Expert VSA — Background"
+grpVsaSetup         = "Expert VSA — Setup"
+
+wideBarMult         = input.float(1.12, "Wide bar x rangeMed", minval=1.0, maxval=3.0, step=0.01, group=grpVsaBars)
+narrowBarMult       = input.float(0.88, "Narrow bar x rangeMed", minval=0.10, maxval=1.0, step=0.01, group=grpVsaBars)
+closeNearHighPct    = input.float(0.75, "Close near high", minval=0.50, maxval=0.99, step=0.01, group=grpVsaBars)
+closeNearLowPct     = input.float(0.25, "Close near low", minval=0.01, maxval=0.50, step=0.01, group=grpVsaBars)
+closeUpperPct       = input.float(0.60, "Close upper threshold", minval=0.50, maxval=0.95, step=0.01, group=grpVsaBars)
+closeLowerPct       = input.float(0.40, "Close lower threshold", minval=0.05, maxval=0.50, step=0.01, group=grpVsaBars)
+
+climaxVolBaseMult   = input.float(1.35, "Climax volume x base", minval=1.0, maxval=5.0, step=0.01, group=grpVsaVol)
+climaxRelVolMin     = input.float(1.25, "Climax min relVol", minval=1.0, maxval=5.0, step=0.01, group=grpVsaVol)
+climaxVolZMin       = input.float(1.25, "Climax min volZ", minval=0.0, maxval=5.0, step=0.01, group=grpVsaVol)
+effortVolBaseMult   = input.float(1.08, "Effort volume x base", minval=1.0, maxval=3.0, step=0.01, group=grpVsaVol)
+effortRelVolMin     = input.float(1.02, "Effort min relVol", minval=1.0, maxval=3.0, step=0.01, group=grpVsaVol)
+quietVolBaseMax     = input.float(0.88, "Quiet volume max x base", minval=0.10, maxval=1.0, step=0.01, group=grpVsaVol)
+quietRelVolMax      = input.float(0.95, "Quiet max relVol", minval=0.10, maxval=1.5, step=0.01, group=grpVsaVol)
+dryVolBaseMax       = input.float(0.75, "Dry volume max x base", minval=0.10, maxval=1.0, step=0.01, group=grpVsaVol)
+dryRelVolMax        = input.float(0.85, "Dry max relVol", minval=0.10, maxval=1.5, step=0.01, group=grpVsaVol)
+
+bgSupportStrengthMin = input.float(24.0, "BG support: own strength min", minval=0.0, maxval=100.0, step=0.5, group=grpVsaBg)
+bgSupportOppWeakMin  = input.float(20.0, "BG support: opposite weakness min", minval=0.0, maxval=100.0, step=0.5, group=grpVsaBg)
+bgSupportContextMin  = input.float(56.0, "BG support: context min", minval=0.0, maxval=100.0, step=0.5, group=grpVsaBg)
+bgConflictWeakMin    = input.float(24.0, "BG conflict: own weakness min", minval=0.0, maxval=100.0, step=0.5, group=grpVsaBg)
+bgConflictOppStrMin  = input.float(24.0, "BG conflict: opposite strength min", minval=0.0, maxval=100.0, step=0.5, group=grpVsaBg)
+bgConflictContextMax = input.float(44.0, "BG conflict: context max", minval=0.0, maxval=100.0, step=0.5, group=grpVsaBg)
+bgRollingWindowBars = input.int(34, "BG rolling window (20-50)", minval=20, maxval=50, group=grpVsaBg)
+bgTrendImbalanceMin = input.float(0.22, "BG regime trend imbalance min", minval=0.05, maxval=0.60, step=0.01, group=grpVsaBg)
+bgChaosFlipPctMin = input.float(0.62, "BG regime chaos flip ratio min", minval=0.30, maxval=0.95, step=0.01, group=grpVsaBg)
+
+setupTriggerMin      = input.float(10.0, "Setup min trigger", minval=0.0, maxval=30.0, step=0.5, group=grpVsaSetup)
+setupPressureQOffset = input.float(4.0, "Pressure setup quality offset", minval=0.0, maxval=20.0, step=0.5, group=grpVsaSetup)
+setupPressureIOffset = input.float(6.0, "Pressure setup impulse offset", minval=0.0, maxval=20.0, step=0.5, group=grpVsaSetup)
+
+// =====================================================
+// FIB CONTEXT — LOCATION / TARGETS
+// =====================================================
+grpFib             = "Fib — Context / Targets"
+useFibContext      = input.bool(true, "Use Fib context", group=grpFib)
+fibAnchorMode      = input.string("Swing", "Fib anchor mode", options=["Swing", "ZoneImpulse"], group=grpFib)
+fibMinLegAtr       = input.float(1.2, "Fib min leg (ATR)", minval=0.2, maxval=20.0, step=0.1, group=grpFib)
+fibRetraceTolAtr   = input.float(0.22, "Fib retrace tolerance (ATR)", minval=0.02, maxval=2.0, step=0.01, group=grpFib)
+fibUse382          = input.bool(true, "Use 0.382 retrace", group=grpFib)
+fibUse50           = input.bool(true, "Use 0.5 retrace", group=grpFib)
+fibUse618          = input.bool(true, "Use 0.618 retrace", group=grpFib)
+fibUse705          = input.bool(false, "Use 0.705 retrace", group=grpFib)
+fibUse1272         = input.bool(true, "Use 1.272 extension", group=grpFib)
+fibUse1618         = input.bool(true, "Use 1.618 extension", group=grpFib)
+fibLocationWeight  = input.float(6.0, "Fib location weight", minval=0.0, maxval=20.0, step=0.5, group=grpFib)
+fibProjectionWeight= input.float(0.55, "Fib projection helper weight", minval=0.0, maxval=2.0, step=0.05, group=grpFib)
+
+// =====================================================
+// SCENARIO CONTRIBUTION — QUALITY PIPELINE
+// =====================================================
+grpScenario        = "Scenario Contribution — Quality"
+useScenarioContribution = input.bool(true, "Use scenario contribution", group=grpScenario)
+scenarioDirectionWeight = input.float(1.10, "Direction weight", minval=0.1, maxval=5.0, step=0.05, group=grpScenario)
+scenarioContributionCap = input.float(4.0, "Scenario contribution cap", minval=0.5, maxval=12.0, step=0.1, group=grpScenario)
+
+// =====================================================
+// HELPERS — TECHNICAL LAYER
+// =====================================================
+atr = ta.atr(atrLen)
+bool isMinimal = viewMode == "Minimal"
+
+
+// --- Helper domain: math / formatting ---
+clamp100(float x) =>
+    math.max(0.0, math.min(100.0, x))
+
+scoreToInt(float x) =>
+    int(math.round(clamp100(x)))
+
+strPct(float x) =>
+    str.tostring(scoreToInt(x)) + "%"
+
+dirName(int d) =>
+    d == 1 ? "LONG" : d == -1 ? "SHORT" : "NONE"
+
+
+// --- Helper domain: price levels / zone geometry ---
+zoneTouched(float zTop, float zBot) =>
+    not na(zTop) and not na(zBot) and low <= math.max(zTop, zBot) and high >= math.min(zTop, zBot)
+
+zoneBottom(float zTop, float zBot) =>
+    math.min(zTop, zBot)
+
+zoneTop(float zTop, float zBot) =>
+    math.max(zTop, zBot)
+
+zoneMid(float zTop, float zBot) =>
+    (zTop + zBot) / 2.0
+
+nearLevel(float price, float lvl, float tolAtr) =>
+    not na(lvl) and math.abs(price - lvl) <= atr * tolAtr
+
+clipLen(int x, int lo, int hi) =>
+    math.max(lo, math.min(hi, x))
+
+touchScore(int touches) =>
+    touches <= 0 ? 12.0 : touches == 1 ? 9.0 : touches == 2 ? 6.0 : touches == 3 ? 3.0 : 0.0
+
+agePenalty(int zoneBar) =>
+    not na(zoneBar) ? (bar_index - zoneBar) * 0.55 : 999.0
+
+feedContext() =>
+    syminfo.type == "futures" ? "Futures" :
+     syminfo.type == "cfd" ? "CFD proxy" :
+     syminfo.type == "crypto" ? "Crypto proxy" :
+     syminfo.type == "stock" ? "Stock" :
+     syminfo.type
+
+
+// --- Helper domain: collections / level de-duplication ---
+levelExists(array<float> arr, float lvl, float tol) =>
+    bool found = false
+    if array.size(arr) > 0
+        for i = 0 to array.size(arr) - 1
+            if math.abs(array.get(arr, i) - lvl) <= tol
+                found := true
+    found
+
+
+// --- Helper domain: UI text mapping (state / reason / blocker / dashboard) ---
+lqUpperText(int st) =>
+    st == 0 ? "U-LQ fresh" : "U-LQ swept"
+
+lqLowerText(int st) =>
+    st == 0 ? "D-LQ fresh" : "D-LQ swept"
+
+zoneRoleText(bool isBull) =>
+    isBull ? "Support" : "Resistance"
+
+zoneStateText(bool isFresh, int touches) =>
+    isFresh ? "Fresh" : "Retest x" + str.tostring(touches)
+
+zoneLabelText(bool isBull, string zoneType, bool isFresh, int touches) =>
+    zoneRoleText(isBull) + " | " + zoneType + " | " + zoneStateText(isFresh, touches)
+
+biasTriText(bool bull, bool bear) =>
+    bull ? "Bull" : bear ? "Bear" : "Neutral"
+
+deltaRoleText(float d) =>
+    na(d) ? "N/A" :
+     d >= 4.0 ? "Bull strong" :
+     d >= 1.5 ? "Bull confirm" :
+     d <= -4.0 ? "Bear strong" :
+     d <= -1.5 ? "Bear confirm" :
+     "Neutral"
+
+reasonFinal(string msg) =>
+    "Final decision: " + msg
+
+locationStructuralText(bool active, string zoneType, bool nearZone, bool fresh, int touches, bool sweepNow, string sweepLabel) =>
+    string txt = "Brak"
+    if active
+        txt := zoneType + " | " + (nearZone ? "Near" : "Stored") + " | " + (fresh ? "Fresh" : "Retest x" + str.tostring(touches)) + (sweepNow ? " | " + sweepLabel : "")
+    else if sweepNow
+        txt := sweepLabel + " bez aktywnej strefy"
+    txt
+
+locationExecutableText(bool dualExec, bool execRaw, bool execPrimary, bool nearZone, string sideName, string sweepLabel) =>
+    string txt = "NIE | poza lokalizacja " + sideName + " teraz"
+    if dualExec
+        txt := execPrimary ? (nearZone ? "DUAL | priorytet " + sideName + " | strefa " + sideName : "DUAL | priorytet " + sideName + " | " + sweepLabel) : (nearZone ? "DUAL | wtorny " + sideName + " | strefa " + sideName : "DUAL | wtorny " + sideName + " | " + sweepLabel)
+    else if execRaw
+        txt := nearZone ? "TAK | przy strefie " + sideName : "TAK | " + sweepLabel
+    txt
+
+scenarioExecutionReason(bool canExec, bool tfAllowed, string scenarioQuality, bool hasExecLocation, bool ltfBlocked, bool advisoryHardBlock, bool manipulationRisk, bool hasConfirm, bool hasTrigger, string sideName) =>
+    canExec ? sideName + " executable now" :
+     not tfAllowed ? sideName + " blocked by TF" :
+     scenarioQuality == "HARD_INVALIDATION" ? sideName + " blocked by hard invalidation" :
+     not hasExecLocation ? sideName + " blocked: no executable location now" :
+     advisoryHardBlock ? sideName + " blocked by strong advisory opposition" :
+     not hasConfirm ? sideName + " blocked: local confirm missing" :
+     not hasTrigger ? sideName + " blocked: trigger/setup not active" :
+     ltfBlocked ? sideName + " delegated LTF not supportive yet" :
+     manipulationRisk ? sideName + " blocked: manipulation sweep without strict reclaim/absorption yet" :
+     sideName + " execution not open now"
+
+scenarioStateReasonText(string scenarioState, bool failureRaw, bool manipulationRisk, bool correctionDestructive, bool approachExhausted, string sideName, string failureTag) =>
+    scenarioState == "KILL_EXIT" ? sideName + " active position hit valid kill condition" :
+     scenarioState == "HARD_INVALIDATION" ? (failureRaw ? failureTag + " failure structurally killed " + sideName + " scenario" : sideName + " thesis structurally invalidated") :
+     scenarioState == "SOFT_BLOCK" ? sideName + " thesis survives, but execution is temporarily opposed (not routine waiting)" :
+     scenarioState == "FRAGILE" ? sideName + " scenario is directionally alive but durability is low" :
+     scenarioState == "SOFT_DETERIORATION" ? sideName + " follow-through quality is weakening" :
+     scenarioState == "WARNING" ? (manipulationRisk ? sideName + " scenario under warning: manipulation sweep active, reclaim/absorption still missing" : correctionDestructive ? sideName + " scenario under warning: destructive pullback in rolling background" : approachExhausted ? sideName + " scenario under warning: approach/exhaustion in rolling background" : sideName + " scenario under warning pressure") :
+     sideName + " scenario stable / normal noise"
+
+stateSourceText(string execLbl, bool setupLive, string setupSide, string setupType, string setupReason, bool watchTrend, bool watchReaction, bool accelStrong, string accelText, bool cascadeStrong, string cascadeText, bool impulseStrong, string impulseText) =>
+    setupLive ? execLbl + " SETUP " + setupSide + " | " + setupType + " | " + setupReason :
+     watchTrend ? execLbl + " WATCH " + setupSide + " | TREND" :
+     watchReaction ? execLbl + " WATCH " + setupSide + " | REACTION" :
+     accelStrong ? execLbl + " STRUCTURE | " + accelText :
+     cascadeStrong ? execLbl + " STRUCTURE | " + cascadeText :
+     impulseStrong ? execLbl + " STRUCTURE | " + impulseText :
+     "Brak"
+
+pickSideString(string side, string longVal, string shortVal, string noneVal) =>
+    side == "LONG" ? longVal : side == "SHORT" ? shortVal : noneVal
+
+pickSideBool(string side, bool longVal, bool shortVal, bool noneVal) =>
+    side == "LONG" ? longVal : side == "SHORT" ? shortVal : noneVal
+
+pickFocusString(int focusSide, string longVal, string shortVal) =>
+    focusSide == 1 ? longVal : shortVal
+
+pickFocusFloat(int focusSide, float longVal, float shortVal) =>
+    focusSide == 1 ? longVal : shortVal
+
+composeScenarioReasonText(string survivalReason, string qualityReason, string executionReason, string preState, string regimeState, string manipReason) =>
+    "ST: " + survivalReason + " || Q: " + qualityReason + " || X: " + executionReason + " || PRE: " + preState + " || REGIME: " + regimeState + " || MANIP: " + manipReason
+
+dashQualitySummaryText(string focusName, int focusSide, float bullQ, float bearQ, float bullI, float bearI) =>
+    focusName + " | Q " + strPct(pickFocusFloat(focusSide, bullQ, bearQ)) + " | I " + strPct(pickFocusFloat(focusSide, bullI, bearI))
+
+dashScenarioSummaryText(string focusName, int focusSide, float bullScenarioScore, float bearScenarioScore, float bullFailRisk, float bearFailRisk) =>
+    focusName + " | " + strPct(pickFocusFloat(focusSide, bullScenarioScore, bearScenarioScore)) + " | fail " + strPct(pickFocusFloat(focusSide, bullFailRisk, bearFailRisk))
+
+dashContextSummaryText(string segmentState, string regimeText, float bullContext, float bearContext) =>
+    segmentState + " | " + regimeText + " | L " + strPct(bullContext) + " / S " + strPct(bearContext)
+
+dashFibSummaryText(bool useFibContext, int focusSide, bool bullFibConfluence, bool bullFibNear, bool bearFibConfluence, bool bearFibNear) =>
+    not useFibContext ? "Off" : focusSide == 1 ? (bullFibConfluence ? "LONG confluence" : bullFibNear ? "LONG near" : "Brak") : (bearFibConfluence ? "SHORT confluence" : bearFibNear ? "SHORT near" : "Brak")
+
+// --- Helper domain: UI text mapping (LTF execution context) ---
+bullLtfBlockerText(string _execTf, float _ltf1Delta, float _ltf2Delta, float _ltfEntryBlockThreshold) =>
+    string _txt = "LTF n/a on 1m"
+    if _execTf == "15"
+        if _ltf1Delta <= -_ltfEntryBlockThreshold
+            _txt := "5m nie wspiera LONG"
+        else if _ltf1Delta < 1.5
+            _txt := "5m nie potwierdza LONG"
+        else if _ltf2Delta <= -1.5
+            _txt := "1m działa przeciw LONG"
+        else
+            _txt := "1m nie wspiera LONG"
+    else if _execTf == "5"
+        _txt := _ltf1Delta <= -_ltfEntryBlockThreshold ? "1m nie wspiera LONG" : "1m nie potwierdza LONG"
+    _txt
+
+bearLtfBlockerText(string _execTf, float _ltf1Delta, float _ltf2Delta, float _ltfEntryBlockThreshold) =>
+    string _txt = "LTF n/a on 1m"
+    if _execTf == "15"
+        if _ltf1Delta >= _ltfEntryBlockThreshold
+            _txt := "5m nie wspiera SHORT"
+        else if _ltf1Delta > -1.5
+            _txt := "5m nie potwierdza SHORT"
+        else if _ltf2Delta >= 1.5
+            _txt := "1m działa przeciw SHORT"
+        else
+            _txt := "1m nie wspiera SHORT"
+    else if _execTf == "5"
+        _txt := _ltf1Delta >= _ltfEntryBlockThreshold ? "1m nie wspiera SHORT" : "1m nie potwierdza SHORT"
+    _txt
+
+bullLtfWaitText(string _execTf, float _ltf1Delta) =>
+    _execTf == "15" ? (_ltf1Delta < 1.5 ? "Czeka na 5m LONG" : "Czeka na 1m wsparcie LONG") : "Czeka na 1m LONG"
+
+bearLtfWaitText(string _execTf, float _ltf1Delta) =>
+    _execTf == "15" ? (_ltf1Delta > -1.5 ? "Czeka na 5m SHORT" : "Czeka na 1m wsparcie SHORT") : "Czeka na 1m SHORT"
+
+uiExecSideText(bool locNow, bool confirmRaw, bool microBreak, string sideName) =>
+    locNow ? (confirmRaw ? "TAK | " + sideName + " confirmed" : microBreak ? "WARUNKOWO | " + sideName + " micro break" : "NIE | " + sideName + " czeka na confirm") : "NIE | " + sideName + " poza lokalizacja"
+
+uiConfirmSideText(bool confirmRaw, bool failureRaw, bool microBreak, string sideName) =>
+    confirmRaw ? sideName + " confirm" : failureRaw ? sideName + " failed" : microBreak ? sideName + " micro break" : "Brak " + str.lower(sideName) + " confirm"
+
+uiAdvisoryForLongFocus(bool _bearCascadeStrong, bool _bearAccelStrong, bool _endUpStrong, bool _bearCascadeWeak, bool _bearAccelWeak, bool _endUpWeak, bool _bearWarning) =>
+    _bearCascadeStrong ? "Bear cascade strong" :
+     _bearAccelStrong ? "Bear acceleration strong" :
+     _endUpStrong ? "End up strong" :
+     _bearCascadeWeak ? "Bear cascade weak" :
+     _bearAccelWeak ? "Bear acceleration weak" :
+     _endUpWeak ? "End up weak" :
+     _bearWarning ? "Bear pressure rising" : "Brak"
+
+uiAdvisoryForShortFocus(bool _bullCascadeStrong, bool _bullAccelStrong, bool _endDownStrong, bool _bullCascadeWeak, bool _bullAccelWeak, bool _endDownWeak, bool _bullWarning) =>
+    _bullCascadeStrong ? "Bull cascade strong" :
+     _bullAccelStrong ? "Bull acceleration strong" :
+     _endDownStrong ? "End down strong" :
+     _bullCascadeWeak ? "Bull cascade weak" :
+     _bullAccelWeak ? "Bull acceleration weak" :
+     _endDownWeak ? "End down weak" :
+     _bullWarning ? "Bull pressure rising" : "Brak"
+
+
+
+// --- Helper domain: scoring / ranking utilities ---
+recencyPoints(int sinceBars, int window, float points) =>
+    sinceBars <= window ? points * (1.0 - sinceBars / (window + 1.0)) : 0.0
+
+qualityBandText(float q) =>
+    q >= 75 ? "HIGH" : q >= 55 ? "MID" : q > 0 ? "LOW" : "N/A"
+
+qualityToModifier(float q, float neutral, float divisor, float cap) =>
+    math.max(-cap, math.min(cap, (q - neutral) / divisor))
+scenarioContribution(float scenarioRank, bool failureRaw, float cap) =>
+    float contributionRaw = useScenarioContribution ? qualityToModifier(scenarioRank, 52.0, 16.0, cap) : 0.0
+    failureRaw ? math.min(contributionRaw, 0.0) : contributionRaw
+setupTypeText(bool reactionSetup, bool pressureSetup, bool trendSetup, string reactionTxt, string pressureTxt, string trendTxt) =>
+    reactionSetup ? reactionTxt : pressureSetup ? pressureTxt : trendSetup ? trendTxt : ""
+setupRankScore(bool reactionSetup, bool pressureSetup, bool trendSetup, float quality, float impulse) =>
+    (reactionSetup ? 3.0 : pressureSetup ? 2.0 : trendSetup ? 1.0 : 0.0) + quality * 0.01 + impulse * 0.005
+setupReasonPrefix(bool fromDirectStructure, bool fromWatch) =>
+    (fromDirectStructure and not fromWatch ? "DIRECT | " : "WATCH | ")
+setupTerminalLost(string execTf, bool setupLive, int setupBar, int supportBarsSince, bool dominant) =>
+    execTf == "1" and setupLive and bar_index > setupBar + 2 and supportBarsSince >= 3 and not dominant
+setupMaxBars(string execTf, string setupType, string reactionTypeText) =>
+    execTf == "1" ? (setupType == reactionTypeText ? 4 : 5) : (setupType == reactionTypeText ? 5 : 6)
+
+// --- Helper domain: object lifecycle (line / label / box) ---
+deleteLineRef(line _ln) =>
+    if not na(_ln)
+        line.delete(_ln)
+
+deleteLabelRef(label _lb) =>
+    if not na(_lb)
+        label.delete(_lb)
+
+upsertHLine(line _ln, bool _visible, int _x1, int _x2, float _y, color _lineColor, _lineStyle, int _lineWidth) =>
+    line _out = _ln
+    if not _visible or na(_y)
+        if not na(_out)
+            line.delete(_out)
+        _out := na
+    else
+        if na(_out)
+            _out := line.new(_x1, _y, _x2, _y, color=_lineColor, style=_lineStyle, width=_lineWidth)
+        else
+            line.set_xy1(_out, _x1, _y)
+            line.set_xy2(_out, _x2, _y)
+            line.set_color(_out, _lineColor)
+            line.set_style(_out, _lineStyle)
+            line.set_width(_out, _lineWidth)
+    _out
+
+upsertLeftLabel(label _lb, bool _visible, int _x, float _y, string _txt, color _bg, color _txtColor, _sz) =>
+    label _out = _lb
+    if not _visible or na(_y)
+        if not na(_out)
+            label.delete(_out)
+        _out := na
+    else
+        if na(_out)
+            _out := label.new(_x, _y, _txt, style=label.style_label_left, textcolor=_txtColor, color=_bg, size=_sz)
+        else
+            label.set_x(_out, _x)
+            label.set_y(_out, _y)
+            label.set_text(_out, _txt)
+            label.set_color(_out, _bg)
+            label.set_textcolor(_out, _txtColor)
+            label.set_size(_out, _sz)
+            label.set_style(_out, label.style_label_left)
+    _out
+
+upsertZoneBox(box _bx, bool _visible, int _x1, int _x2, float _top, float _bot, color _bg, color _border) =>
+    box _out = _bx
+    if not _visible or na(_top) or na(_bot)
+        if not na(_out)
+            box.delete(_out)
+        _out := na
+    else
+        float _topSafe = math.max(_top, _bot)
+        float _botSafe = math.min(_top, _bot)
+        if na(_out)
+            _out := box.new(_x1, _topSafe, _x2, _botSafe, bgcolor=_bg, border_color=_border)
+        else
+            box.set_left(_out, _x1)
+            box.set_right(_out, _x2)
+            box.set_top(_out, _topSafe)
+            box.set_bottom(_out, _botSafe)
+            box.set_bgcolor(_out, _bg)
+            box.set_border_color(_out, _border)
+    _out
+
+
+// --- Helper domain: market feature helpers ---
+dualSegmentDirectionalFlow(int _bullBars, int _bearBars) =>
+    float _upVolBull = 0.0
+    float _downVolBull = 0.0
+    float _upRangeBull = 0.0
+    float _downRangeBull = 0.0
+    float _upVolBear = 0.0
+    float _downVolBear = 0.0
+    float _upRangeBear = 0.0
+    float _downRangeBear = 0.0
+
+    for i = 0 to 39
+        if i < _bullBars
+            _upVolBull += close[i] > open[i] ? volume[i] : 0.0
+            _downVolBull += close[i] < open[i] ? volume[i] : 0.0
+            _upRangeBull += close[i] > open[i] ? (high[i] - low[i]) : 0.0
+            _downRangeBull += close[i] < open[i] ? (high[i] - low[i]) : 0.0
+        if i < _bearBars
+            _upVolBear += close[i] > open[i] ? volume[i] : 0.0
+            _downVolBear += close[i] < open[i] ? volume[i] : 0.0
+            _upRangeBear += close[i] > open[i] ? (high[i] - low[i]) : 0.0
+            _downRangeBear += close[i] < open[i] ? (high[i] - low[i]) : 0.0
+
+    [_upVolBull, _downVolBull, _upRangeBull, _downRangeBull, _upVolBear, _downVolBear, _upRangeBear, _downRangeBear]
+
+segmentPctFromFlow(bool _trendOk, float _dirVol, float _oppVol, float _dirRange, float _oppRange, bool _recentSignal, bool _noAccept, bool _effortResult) =>
+    float _pct = 0.0
+    _pct += _trendOk ? 16 : 0
+    _pct += _dirVol > _oppVol * 1.04 ? 14 : 0
+    _pct += _dirRange > _oppRange * 1.03 ? 12 : 0
+    _pct += _recentSignal ? 10 : 0
+    _pct += _noAccept ? 8 : 0
+    _pct += _effortResult ? 8 : 0
+    clamp100(_pct)
+
+// --- Helper domain: fib technical helpers ---
+fibRetraceLevelBull(float _low, float _high, float _ratio) =>
+    _high - (_high - _low) * _ratio
+
+fibRetraceLevelBear(float _high, float _low, float _ratio) =>
+    _low + (_high - _low) * _ratio
+
+fibExtensionLevelBull(float _low, float _high, float _ratio) =>
+    _high + (_high - _low) * math.max(_ratio - 1.0, 0.0)
+
+fibExtensionLevelBear(float _high, float _low, float _ratio) =>
+    _low - (_high - _low) * math.max(_ratio - 1.0, 0.0)
+
+pickClosestFib(float _price, bool _u1, float _l1, bool _u2, float _l2, bool _u3, float _l3, bool _u4, float _l4) =>
+    float _bestLvl = na
+    float _bestDist = 1000000.0
+    if _u1 and not na(_l1)
+        float _d1 = math.abs(_price - _l1)
+        if _d1 < _bestDist
+            _bestDist := _d1
+            _bestLvl := _l1
+    if _u2 and not na(_l2)
+        float _d2 = math.abs(_price - _l2)
+        if _d2 < _bestDist
+            _bestDist := _d2
+            _bestLvl := _l2
+    if _u3 and not na(_l3)
+        float _d3 = math.abs(_price - _l3)
+        if _d3 < _bestDist
+            _bestDist := _d3
+            _bestLvl := _l3
+    if _u4 and not na(_l4)
+        float _d4 = math.abs(_price - _l4)
+        if _d4 < _bestDist
+            _bestDist := _d4
+            _bestLvl := _l4
+    [_bestLvl, _bestDist]
+
+
+// --- Helper domain: shared feature packs (VSA / flow / structure) ---
+barFeaturePack() =>
+    float _range = high - low
+    float _rangeMed = ta.sma(high - low, 20)
+
+    float _closePos = _range > 0 ? (close - low) / _range : 0.5
+    bool _closeNearHigh = _closePos >= closeNearHighPct
+    bool _closeNearLow = _closePos <= closeNearLowPct
+    bool _closeUpper60 = _closePos >= closeUpperPct
+    bool _closeLower40 = _closePos <= closeLowerPct
+    bool _wideBar = _range > _rangeMed * wideBarMult
+    bool _narrowBar = _range < _rangeMed * narrowBarMult
+
+    float _emaFast = ta.ema(close, 9)
+    float _emaSlow = ta.ema(close, 21)
+
+    float _volBase = ta.sma(volume, 20)
+    float _volEma = ta.ema(volume, 34)
+    float _volSma = ta.sma(volume, 34)
+    float _volStd = ta.stdev(volume, 34)
+
+    float _relVol = _volEma > 0 ? volume / _volEma : 1.0
+    float _volZ = _volStd > 0 ? (volume - _volSma) / _volStd : 0.0
+
+    bool _climaxVol = volume > _volBase * climaxVolBaseMult or _relVol > climaxRelVolMin or _volZ > climaxVolZMin
+    bool _effortVol = volume > _volBase * effortVolBaseMult and _relVol > effortRelVolMin
+    bool _quietVol = volume < _volBase * quietVolBaseMax and _relVol < quietRelVolMax
+    bool _dryVol = volume < _volBase * dryVolBaseMax and _relVol < dryRelVolMax
+
+    [_range, _rangeMed, _closePos, _closeNearHigh, _closeNearLow, _closeUpper60, _closeLower40, _wideBar, _narrowBar, _emaFast, _emaSlow, _volBase, _volEma, _volSma, _volStd, _relVol, _volZ, _climaxVol, _effortVol, _quietVol, _dryVol]
+
+directionalFlowPack(int _len) =>
+    float _upBarVol = close > open ? volume : 0.0
+    float _downBarVol = close < open ? volume : 0.0
+    float _upRangeBar = close > open ? (high - low) : 0.0
+    float _downRangeBar = close < open ? (high - low) : 0.0
+
+    float _upVolWindow = 0.0
+    float _downVolWindow = 0.0
+    float _upRangeWindow = 0.0
+    float _downRangeWindow = 0.0
+
+    for i = 0 to _len - 1
+        _upVolWindow += nz(_upBarVol[i])
+        _downVolWindow += nz(_downBarVol[i])
+        _upRangeWindow += nz(_upRangeBar[i])
+        _downRangeWindow += nz(_downRangeBar[i])
+
+    [_upBarVol, _downBarVol, _upRangeBar, _downRangeBar, _upVolWindow, _downVolWindow, _upRangeWindow, _downRangeWindow]
+
+structureFeaturePack() =>
+    float _highestPrevMicro = ta.highest(high, microLen)[1]
+    float _lowestPrevMicro = ta.lowest(low, microLen)[1]
+    float _highestPrev3 = ta.highest(high, 3)[1]
+    float _lowestPrev3 = ta.lowest(low, 3)[1]
+    float _trailLowBase = ta.lowest(low, trailLen)
+    float _trailHighBase = ta.highest(high, trailLen)
+
+    [_highestPrevMicro, _lowestPrevMicro, _highestPrev3, _lowestPrev3, _trailLowBase, _trailHighBase]
+
+
+// =====================================================
+// LTF PACK — TECHNICAL FEATURE AGGREGATION
+// =====================================================
+ltfPack() =>
+    [_range, _rangeMed, _closePos, _closeNearHigh, _closeNearLow, _closeUpper60, _closeLower40, _wideBar, _narrowBar, _emaFast, _emaSlow, _volBase, _volEma, _volSma, _volStd, _relVol, _volZ, _climaxVol, _effortVol, _quietVol, _dryVol] = barFeaturePack()
+    [_upBarVol, _downBarVol, _upRangeBar, _downRangeBar, _upVol5, _downVol5, _upRange5, _downRange5] = directionalFlowPack(5)
+
+    bool _bull2BR = close[1] < open[1] and close > high[1] and low <= low[1]
+    bool _bear2BR = close[1] > open[1] and close < low[1] and high >= high[1]
+
+    bool _bullStoppingPotential = low < low[1] and _wideBar and _climaxVol and _closeUpper60
+    bool _bearStoppingPotential = high > high[1] and _wideBar and _climaxVol and _closeLower40
+
+    bool _bullShakeout = low < low[1] and _wideBar and _climaxVol and _closeUpper60 and close > open
+    bool _bearUpthrust = high > high[1] and _wideBar and _climaxVol and _closeLower40 and close < open
+
+    bool _bullTestPotential = low < low[1] and _quietVol and not _wideBar and _closeUpper60 and close >= open
+    bool _bearTestPotential = high > high[1] and _quietVol and not _wideBar and _closeLower40 and close <= open
+
+    bool _bullAbsorb = low < low[1] and _effortVol and _closeUpper60 and close >= open
+    bool _bearAbsorb = high > high[1] and _effortVol and _closeLower40 and close <= open
+
+    bool _bullNoAcceptLower = low < low[1] and _closeUpper60 and high > high[1]
+    bool _bearNoAcceptUpper = high > high[1] and _closeLower40 and low < low[1]
+
+    bool _bullNoSupplyPotential = _narrowBar and _dryVol and low <= low[1] and _closeUpper60 and close >= open and (_bullStoppingPotential[1] or _bullShakeout[1] or _bullAbsorb[1] or _bullTestPotential[1])
+    bool _bearNoDemandPotential = _narrowBar and _dryVol and high >= high[1] and _closeLower40 and close <= open and (_bearStoppingPotential[1] or _bearUpthrust[1] or _bearAbsorb[1] or _bearTestPotential[1])
+
+    bool _bullAbsorbConfirmed = _bullAbsorb[1] and close > high[1]
+    bool _bearAbsorbConfirmed = _bearAbsorb[1] and close < low[1]
+    bool _bullStoppingConfirmed = _bullStoppingPotential[1] and close > high[1]
+    bool _bearStoppingConfirmed = _bearStoppingPotential[1] and close < low[1]
+    bool _bullShakeoutConfirmed = _bullShakeout[1] and close > high[1]
+    bool _bearUpthrustConfirmed = _bearUpthrust[1] and close < low[1]
+    bool _bullTestConfirmed = _bullTestPotential[1] and close > high[1]
+    bool _bearTestConfirmed = _bearTestPotential[1] and close < low[1]
+    bool _bullNoSupplyConfirmed = _bullNoSupplyPotential[1] and close > high[1]
+    bool _bearNoDemandConfirmed = _bearNoDemandPotential[1] and close < low[1]
+
+    bool _bullTestFailed = _bullTestPotential[1] and close < low[1]
+    bool _bearTestFailed = _bearTestPotential[1] and close > high[1]
+    bool _bullNoSupplyFailed = _bullNoSupplyPotential[1] and close < low[1]
+    bool _bearNoDemandFailed = _bearNoDemandPotential[1] and close > high[1]
+
+    bool _bullNoFollowDown = _bullStoppingConfirmed or _bullShakeoutConfirmed or _bullAbsorbConfirmed or _bullTestConfirmed or _bullNoSupplyConfirmed
+    bool _bearNoFollowUp = _bearStoppingConfirmed or _bearUpthrustConfirmed or _bearAbsorbConfirmed or _bearTestConfirmed or _bearNoDemandConfirmed
+
+    bool _bullEffortResultPotential = _effortVol and _wideBar and _closeNearHigh and close > high[1]
+    bool _bearEffortResultPotential = _effortVol and _wideBar and _closeNearLow and close < low[1]
+    bool _bullEffortResultConfirmed = _bullEffortResultPotential or (_bullEffortResultPotential[1] and close > high[1])
+    bool _bearEffortResultConfirmed = _bearEffortResultPotential or (_bearEffortResultPotential[1] and close < low[1])
+    bool _bullEffortResultFailed = _bullEffortResultPotential[1] and close < low[1]
+    bool _bearEffortResultFailed = _bearEffortResultPotential[1] and close > high[1]
+
+    bool _bullStopping = _bullStoppingPotential
+    bool _bearStopping = _bearStoppingPotential
+    bool _bullTest = _bullTestPotential
+    bool _bearTest = _bearTestPotential
+    bool _bullNoSupply = _bullNoSupplyPotential
+    bool _bearNoDemand = _bearNoDemandPotential
+    bool _bullFailedTest = _bearTestFailed
+    bool _bearFailedTest = _bullTestFailed
+
+    bool _bullReaction = _bullStopping or _bullShakeout or _bullTest or _bullNoSupply or _bull2BR or _bullNoFollowDown or _bullAbsorb or _bullNoAcceptLower or _bullFailedTest
+    bool _bearReaction = _bearStopping or _bearUpthrust or _bearTest or _bearNoDemand or _bear2BR or _bearNoFollowUp or _bearAbsorb or _bearNoAcceptUpper or _bearFailedTest
+
+    bool _bullContinuation = _bullEffortResultConfirmed or (close > _emaFast and _emaFast > _emaSlow and _closeNearHigh and high >= high[1])
+    bool _bearContinuation = _bearEffortResultConfirmed or (close < _emaFast and _emaFast < _emaSlow and _closeNearLow and low <= low[1])
+
+    [_highestPrevMicro, _lowestPrevMicro, _highestPrev3, _lowestPrev3, _trailLowBase, _trailHighBase] = structureFeaturePack()
+
+    bool _bullMicro = close > _highestPrevMicro and _closeUpper60
+    bool _bearMicro = close < _lowestPrevMicro and _closeLower40
+
+    bool _bullSignal = _bullReaction or _bullContinuation
+    bool _bearSignal = _bearReaction or _bearContinuation
+
+    bool _recentBull = nz(ta.barssince(_bullSignal), 1000) <= 4
+    bool _recentBear = nz(ta.barssince(_bearSignal), 1000) <= 4
+
+    bool _bullSegment = _emaFast > _emaSlow and (_recentBull or _bullContinuation or (_closeUpper60 and close > close[1]))
+    bool _bearSegment = _emaFast < _emaSlow and (_recentBear or _bearContinuation or (_closeLower40 and close < close[1]))
+
+    bool _bullFailure = _bullTestFailed or _bullNoSupplyFailed or _bullEffortResultFailed or ((_bullStoppingPotential[1] or _bullShakeout[1] or _bullAbsorb[1] or _bull2BR[1] or _bullNoAcceptLower[1]) and close < low[1]) or (_emaFast < _emaSlow and close < _lowestPrevMicro and _closeLower40)
+    bool _bearFailure = _bearTestFailed or _bearNoDemandFailed or _bearEffortResultFailed or ((_bearStoppingPotential[1] or _bearUpthrust[1] or _bearAbsorb[1] or _bear2BR[1] or _bearNoAcceptUpper[1]) and close > high[1]) or (_emaFast > _emaSlow and close > _highestPrevMicro and _closeUpper60)
+
+    [_emaFast > _emaSlow, _emaFast < _emaSlow, _bullReaction, _bearReaction, _bullContinuation, _bearContinuation, _bullFailure, _bearFailure, _bullMicro, _bearMicro, _bullSegment, _bearSegment]
+
+bullPulseFromPack(bool _trend, bool _reaction, bool _cont, bool _oppFail, bool _micro, bool _segment) =>
+    float _x = 0.0
+    _x += _trend ? 1.0 : 0.0
+    _x += _reaction ? 2.0 : 0.0
+    _x += _cont ? 2.5 : 0.0
+    _x += _oppFail ? 2.5 : 0.0
+    _x += _micro ? 1.5 : 0.0
+    _x += _segment ? 1.5 : 0.0
+    _x
+
+bearPulseFromPack(bool _trend, bool _reaction, bool _cont, bool _oppFail, bool _micro, bool _segment) =>
+    float _x = 0.0
+    _x += _trend ? 1.0 : 0.0
+    _x += _reaction ? 2.0 : 0.0
+    _x += _cont ? 2.5 : 0.0
+    _x += _oppFail ? 2.5 : 0.0
+    _x += _micro ? 1.5 : 0.0
+    _x += _segment ? 1.5 : 0.0
+    _x
+
+// =====================================================
+// PROFILE / TF
+// =====================================================
+string execTf = profile == "Chart TF" ? timeframe.period : profile == "1m" ? "1" : profile == "5m" ? "5" : "15"
+bool tfSupported = timeframe.period == "1" or timeframe.period == "5" or timeframe.period == "15"
+bool tfOk = execTf == timeframe.period and tfSupported
+string execLabel = execTf + "m"
+
+string ctx1Tf = execTf == "1" ? "5" : execTf == "5" ? "15" : "60"
+string ctx2Tf = execTf == "1" ? "15" : execTf == "5" ? "60" : "240"
+
+// =====================================================
+// SOFT HTF BIAS
+// =====================================================
+bool useConfirmedHtfBias = htfMode == "Confirmed"
+
+// Perf: one HTF fetch per context TF (instead of separate confirmed/live calls).
+htfBiasPack(_tf, _confirmed) =>
+    if _confirmed
+        request.security(
+             syminfo.tickerid,
+             _tf,
+             [close[1], ta.ema(close, 20)[1], ta.ema(close, 50)[1], ta.highest(high, 20)[1], ta.lowest(low, 20)[1]],
+             lookahead=barmerge.lookahead_off)
+    else
+        request.security(
+             syminfo.tickerid,
+             _tf,
+             [close, ta.ema(close, 20), ta.ema(close, 50), ta.highest(high, 20), ta.lowest(low, 20)],
+             lookahead=barmerge.lookahead_off)
+
+[ctx1Close, ctx1Ema20, ctx1Ema50, ctx1High20, ctx1Low20] = htfBiasPack(ctx1Tf, useConfirmedHtfBias)
+[ctx2Close, ctx2Ema20, ctx2Ema50, ctx2High20, ctx2Low20] = htfBiasPack(ctx2Tf, useConfirmedHtfBias)
+
+float ctx1Mid = (ctx1High20 + ctx1Low20) / 2.0
+float ctx2Mid = (ctx2High20 + ctx2Low20) / 2.0
+
+bool ctx1Bull = ctx1Close > ctx1Mid and ctx1Close > ctx1Ema20 and ctx1Ema20 >= ctx1Ema50
+bool ctx1Bear = ctx1Close < ctx1Mid and ctx1Close < ctx1Ema20 and ctx1Ema20 <= ctx1Ema50
+bool ctx2Bull = ctx2Close > ctx2Mid and ctx2Close > ctx2Ema20 and ctx2Ema20 >= ctx2Ema50
+bool ctx2Bear = ctx2Close < ctx2Mid and ctx2Close < ctx2Ema20 and ctx2Ema20 <= ctx2Ema50
+
+float softBullBias = (ctx1Bull ? 9.0 : 0.0) + (ctx2Bull ? 12.0 : 0.0)
+float softBearBias = (ctx1Bear ? 9.0 : 0.0) + (ctx2Bear ? 12.0 : 0.0)
+
+string softBiasText = softBullBias > softBearBias ? "Bull soft bias" : softBearBias > softBullBias ? "Bear soft bias" : "Neutral soft bias"
+
+// =====================================================
+// SWINGS / LIQUIDITY
+// =====================================================
+ph = ta.pivothigh(high, pivotLen, pivotLen)
+pl = ta.pivotlow(low, pivotLen, pivotLen)
+
+var float lastSwingHigh = na
+var float lastSwingLow = na
+var int lastSwingHighBar = na
+var int lastSwingLowBar = na
+
+if not na(ph)
+    lastSwingHigh := high[pivotLen]
+    lastSwingHighBar := bar_index - pivotLen
+
+if not na(pl)
+    lastSwingLow := low[pivotLen]
+    lastSwingLowBar := bar_index - pivotLen
+
+float minPen = atr * minSweepPenAtr
+bool rawSweepHigh = not na(lastSwingHigh) and high > lastSwingHigh + minPen and close < lastSwingHigh
+bool rawSweepLow = not na(lastSwingLow) and low < lastSwingLow - minPen and close > lastSwingLow
+
+var int lastSweepHighPrintBar = na
+var int lastSweepLowPrintBar = na
+
+bool sweepHigh = rawSweepHigh and (na(lastSweepHighPrintBar) or bar_index - lastSweepHighPrintBar > sweepCooldownBars)
+bool sweepLow = rawSweepLow and (na(lastSweepLowPrintBar) or bar_index - lastSweepLowPrintBar > sweepCooldownBars)
+
+if sweepHigh
+    lastSweepHighPrintBar := bar_index
+if sweepLow
+    lastSweepLowPrintBar := bar_index
+
+plotshape(showLiquidity and sweepHigh, title="Sweep High", style=shape.labeldown, text="LQ", color=color.new(color.red, isMinimal ? 12 : 0), textcolor=color.white, size=size.tiny, location=location.abovebar)
+plotshape(showLiquidity and sweepLow, title="Sweep Low", style=shape.labelup, text="LQ", color=color.new(color.green, isMinimal ? 12 : 0), textcolor=color.white, size=size.tiny, location=location.belowbar)
+
+// =====================================================
+// ACTIVE LQ MODULE
+// =====================================================
+int liqMaxPools = 8
+int liqShowCount = 4
+int liqLabelCount = viewMode == "Audit" ? math.min(2, liqShowCount) : 0
+float lqDupTol = syminfo.mintick * 2.0
+int lqOffsetBars = isMinimal ? 14 : 11
+int lqWidth = isMinimal ? 1 : 2
+
+var upperLvls = array.new_float()
+var upperBars = array.new_int()
+var upperState = array.new_int()
+
+var lowerLvls = array.new_float()
+var lowerBars = array.new_int()
+var lowerState = array.new_int()
+
+if not na(ph)
+    float lvlU = high[pivotLen]
+    if not levelExists(upperLvls, lvlU, lqDupTol)
+        array.unshift(upperLvls, lvlU)
+        array.unshift(upperBars, bar_index - pivotLen)
+        array.unshift(upperState, 0)
+        if array.size(upperLvls) > liqMaxPools
+            array.pop(upperLvls)
+            array.pop(upperBars)
+            array.pop(upperState)
+
+if not na(pl)
+    float lvlL = low[pivotLen]
+    if not levelExists(lowerLvls, lvlL, lqDupTol)
+        array.unshift(lowerLvls, lvlL)
+        array.unshift(lowerBars, bar_index - pivotLen)
+        array.unshift(lowerState, 0)
+        if array.size(lowerLvls) > liqMaxPools
+            array.pop(lowerLvls)
+            array.pop(lowerBars)
+            array.pop(lowerState)
+
+int bullAcceptedNow = 0
+float bullAcceptedMaxLvl = na
+int bearAcceptedNow = 0
+float bearAcceptedMinLvl = na
+
+int ui = array.size(upperLvls) - 1
+while ui >= 0
+    float lvl = array.get(upperLvls, ui)
+    int st = array.get(upperState, ui)
+
+    bool touched = high >= lvl
+    bool penetrated = high > lvl + minPen
+    bool rejected = touched and close < lvl
+    bool accepted = penetrated and close > lvl and close[1] > lvl
+
+    if st == 0
+        if accepted
+            bullAcceptedNow += 1
+            bullAcceptedMaxLvl := na(bullAcceptedMaxLvl) ? lvl : math.max(bullAcceptedMaxLvl, lvl)
+            array.remove(upperLvls, ui)
+            array.remove(upperBars, ui)
+            array.remove(upperState, ui)
+        else if rejected
+            array.set(upperState, ui, 1)
+    else if st == 1
+        if accepted
+            bullAcceptedNow += 1
+            bullAcceptedMaxLvl := na(bullAcceptedMaxLvl) ? lvl : math.max(bullAcceptedMaxLvl, lvl)
+            array.remove(upperLvls, ui)
+            array.remove(upperBars, ui)
+            array.remove(upperState, ui)
+
+    ui -= 1
+
+int li = array.size(lowerLvls) - 1
+while li >= 0
+    float lvl = array.get(lowerLvls, li)
+    int st = array.get(lowerState, li)
+
+    bool touched = low <= lvl
+    bool penetrated = low < lvl - minPen
+    bool rejected = touched and close > lvl
+    bool accepted = penetrated and close < lvl and close[1] < lvl
+
+    if st == 0
+        if accepted
+            bearAcceptedNow += 1
+            bearAcceptedMinLvl := na(bearAcceptedMinLvl) ? lvl : math.min(bearAcceptedMinLvl, lvl)
+            array.remove(lowerLvls, li)
+            array.remove(lowerBars, li)
+            array.remove(lowerState, li)
+        else if rejected
+            array.set(lowerState, li, 1)
+    else if st == 1
+        if accepted
+            bearAcceptedNow += 1
+            bearAcceptedMinLvl := na(bearAcceptedMinLvl) ? lvl : math.min(bearAcceptedMinLvl, lvl)
+            array.remove(lowerLvls, li)
+            array.remove(lowerBars, li)
+            array.remove(lowerState, li)
+
+    li -= 1
+
+var liqLines = array.new_line()
+var liqLabels = array.new_label()
+int liqLineIdx = 0
+int liqLabelIdx = 0
+
+if showLiquidity
+    int shownU = 0
+    if array.size(upperLvls) > 0
+        for i = 0 to array.size(upperLvls) - 1
+            if shownU < liqShowCount
+                float lvl = array.get(upperLvls, i)
+                int b = array.get(upperBars, i)
+                int st = array.get(upperState, i)
+
+                color lineColorU = st == 0 ? color.new(color.red, isMinimal ? 18 : 8) : color.new(color.orange, isMinimal ? 18 : 8)
+                color labelColorU = st == 0 ? color.new(color.red, isMinimal ? 10 : 0) : color.new(color.orange, isMinimal ? 10 : 0)
+                lineStyleU = st == 0 ? line.style_dashed : line.style_dotted
+
+                line liqLineU = liqLineIdx < array.size(liqLines) ? array.get(liqLines, liqLineIdx) : na
+                liqLineU := upsertHLine(liqLineU, true, b, bar_index + lqOffsetBars, lvl, lineColorU, lineStyleU, lqWidth)
+                if liqLineIdx < array.size(liqLines)
+                    array.set(liqLines, liqLineIdx, liqLineU)
+                else
+                    array.push(liqLines, liqLineU)
+                liqLineIdx += 1
+
+                if shownU < liqLabelCount
+                    label liqLabelU = liqLabelIdx < array.size(liqLabels) ? array.get(liqLabels, liqLabelIdx) : na
+                    liqLabelU := upsertLeftLabel(liqLabelU, true, bar_index + lqOffsetBars, lvl, lqUpperText(st), labelColorU, color.white, size.tiny)
+                    if liqLabelIdx < array.size(liqLabels)
+                        array.set(liqLabels, liqLabelIdx, liqLabelU)
+                    else
+                        array.push(liqLabels, liqLabelU)
+                    liqLabelIdx += 1
+
+                shownU += 1
+
+    int shownL = 0
+    if array.size(lowerLvls) > 0
+        for i = 0 to array.size(lowerLvls) - 1
+            if shownL < liqShowCount
+                float lvl = array.get(lowerLvls, i)
+                int b = array.get(lowerBars, i)
+                int st = array.get(lowerState, i)
+
+                color lineColorL = st == 0 ? color.new(color.green, isMinimal ? 18 : 8) : color.new(color.yellow, isMinimal ? 18 : 8)
+                color labelColorL = st == 0 ? color.new(color.green, isMinimal ? 10 : 0) : color.new(color.yellow, isMinimal ? 10 : 0)
+                lineStyleL = st == 0 ? line.style_dashed : line.style_dotted
+
+                line liqLineL = liqLineIdx < array.size(liqLines) ? array.get(liqLines, liqLineIdx) : na
+                liqLineL := upsertHLine(liqLineL, true, b, bar_index + lqOffsetBars, lvl, lineColorL, lineStyleL, lqWidth)
+                if liqLineIdx < array.size(liqLines)
+                    array.set(liqLines, liqLineIdx, liqLineL)
+                else
+                    array.push(liqLines, liqLineL)
+                liqLineIdx += 1
+
+                if shownL < liqLabelCount
+                    label liqLabelL = liqLabelIdx < array.size(liqLabels) ? array.get(liqLabels, liqLabelIdx) : na
+                    liqLabelL := upsertLeftLabel(liqLabelL, true, bar_index + lqOffsetBars, lvl, lqLowerText(st), labelColorL, color.white, size.tiny)
+                    if liqLabelIdx < array.size(liqLabels)
+                        array.set(liqLabels, liqLabelIdx, liqLabelL)
+                    else
+                        array.push(liqLabels, liqLabelL)
+                    liqLabelIdx += 1
+
+                shownL += 1
+
+int liqLinesSize = array.size(liqLines)
+if liqLinesSize > liqLineIdx
+    for i = liqLineIdx to liqLinesSize - 1
+        line staleLine = array.get(liqLines, i)
+        deleteLineRef(staleLine)
+    for _ = liqLineIdx to liqLinesSize - 1
+        array.pop(liqLines)
+
+int liqLabelsSize = array.size(liqLabels)
+if liqLabelsSize > liqLabelIdx
+    for i = liqLabelIdx to liqLabelsSize - 1
+        label staleLabel = array.get(liqLabels, i)
+        deleteLabelRef(staleLabel)
+    for _ = liqLabelIdx to liqLabelsSize - 1
+        array.pop(liqLabels)
+
+// =====================================================
+// CASCADING LQ MODULE
+// =====================================================
+int cascadeGapBars = execTf == "1" ? 8 : execTf == "5" ? 6 : 4
+int cascadeLifeBars = execTf == "1" ? 14 : execTf == "5" ? 10 : 8
+float cascadeRecoveryTol = atr * 0.10
+
+var int bullCascadeSeq = 0
+var int bearCascadeSeq = 0
+var int bullCascadeStartBar = na
+var int bearCascadeStartBar = na
+var int bullCascadeLastBar = na
+var int bearCascadeLastBar = na
+var float bullCascadeLastLvl = na
+var float bearCascadeLastLvl = na
+var float bullCascadePrevLvl = na
+var float bearCascadePrevLvl = na
+
+bool bullCascadeRecovered = bullCascadeSeq > 0 and not na(bullCascadeLastLvl) and close < bullCascadeLastLvl - cascadeRecoveryTol and bullAcceptedNow == 0
+bool bearCascadeRecovered = bearCascadeSeq > 0 and not na(bearCascadeLastLvl) and close > bearCascadeLastLvl + cascadeRecoveryTol and bearAcceptedNow == 0
+
+if bullCascadeSeq > 0 and (bullCascadeRecovered or (not na(bullCascadeLastBar) and bar_index - bullCascadeLastBar > cascadeLifeBars))
+    bullCascadeSeq := 0
+    bullCascadeStartBar := na
+    bullCascadeLastBar := na
+    bullCascadeLastLvl := na
+    bullCascadePrevLvl := na
+
+if bearCascadeSeq > 0 and (bearCascadeRecovered or (not na(bearCascadeLastBar) and bar_index - bearCascadeLastBar > cascadeLifeBars))
+    bearCascadeSeq := 0
+    bearCascadeStartBar := na
+    bearCascadeLastBar := na
+    bearCascadeLastLvl := na
+    bearCascadePrevLvl := na
+
+int cascadeEventDir = bullAcceptedNow > bearAcceptedNow ? 1 : bearAcceptedNow > bullAcceptedNow ? -1 : 0
+
+if cascadeEventDir == 1
+    if na(bullCascadeLastBar) or bar_index - bullCascadeLastBar > cascadeGapBars
+        bullCascadeSeq := bullAcceptedNow
+        bullCascadeStartBar := bar_index
+    else
+        bullCascadeSeq += bullAcceptedNow
+    bullCascadePrevLvl := bullCascadeLastLvl
+    bullCascadeLastLvl := bullAcceptedMaxLvl
+    bullCascadeLastBar := bar_index
+
+    bearCascadeSeq := 0
+    bearCascadeStartBar := na
+    bearCascadeLastBar := na
+    bearCascadeLastLvl := na
+    bearCascadePrevLvl := na
+
+if cascadeEventDir == -1
+    if na(bearCascadeLastBar) or bar_index - bearCascadeLastBar > cascadeGapBars
+        bearCascadeSeq := bearAcceptedNow
+        bearCascadeStartBar := bar_index
+    else
+        bearCascadeSeq += bearAcceptedNow
+    bearCascadePrevLvl := bearCascadeLastLvl
+    bearCascadeLastLvl := bearAcceptedMinLvl
+    bearCascadeLastBar := bar_index
+
+    bullCascadeSeq := 0
+    bullCascadeStartBar := na
+    bullCascadeLastBar := na
+    bullCascadeLastLvl := na
+    bullCascadePrevLvl := na
+
+bool bullCascadeRecent = bullCascadeSeq > 0 and not na(bullCascadeLastBar) and bar_index - bullCascadeLastBar <= cascadeLifeBars
+bool bearCascadeRecent = bearCascadeSeq > 0 and not na(bearCascadeLastBar) and bar_index - bearCascadeLastBar <= cascadeLifeBars
+
+int bullCascadeSpan = bullCascadeRecent and not na(bullCascadeStartBar) ? bar_index - bullCascadeStartBar : 999
+int bearCascadeSpan = bearCascadeRecent and not na(bearCascadeStartBar) ? bar_index - bearCascadeStartBar : 999
+
+bool bullCascadeFast = bullCascadeRecent and bullCascadeSpan <= cascadeGapBars + 1
+bool bearCascadeFast = bearCascadeRecent and bearCascadeSpan <= cascadeGapBars + 1
+
+bool bullCascadeWeak = bullCascadeRecent and bullCascadeSeq >= 2
+bool bearCascadeWeak = bearCascadeRecent and bearCascadeSeq >= 2
+
+bool bullCascadeStrong = bullCascadeRecent and ((bullCascadeSeq >= 3) or (bullCascadeSeq >= 2 and bullCascadeFast and close > nz(bullCascadeLastLvl, close)))
+bool bearCascadeStrong = bearCascadeRecent and ((bearCascadeSeq >= 3) or (bearCascadeSeq >= 2 and bearCascadeFast and close < nz(bearCascadeLastLvl, close)))
+
+float bullCascadeBoost = bullCascadeStrong ? 4.0 : bullCascadeWeak ? 1.75 : 0.0
+float bearCascadeBoost = bearCascadeStrong ? 4.0 : bearCascadeWeak ? 1.75 : 0.0
+
+float bullCascadePenalty = bearCascadeStrong ? -2.75 : bearCascadeWeak ? -1.25 : 0.0
+float bearCascadePenalty = bullCascadeStrong ? -2.75 : bullCascadeWeak ? -1.25 : 0.0
+
+// =====================================================
+// PRICE / VOLUME CONTEXT
+// =====================================================
+[rangeNow, rangeMed, closePos, closeNearHigh, closeNearLow, closeUpper60, closeLower40, wideBar, narrowBar, emaFast, emaSlow, volBase, volEma, volSma, volStd, relVol, volZ, climaxVol, effortVol, quietVol, dryVol] = barFeaturePack()
+[upBarVol, downBarVol, upRangeBar, downRangeBar, upVol5, downVol5, upRange5, downRange5] = directionalFlowPack(5)
+[highestPrevMicro, lowestPrevMicro, highestPrev3, lowestPrev3, trailLowBase, trailHighBase] = structureFeaturePack()
+
+// =====================================================
+// VSA CORE
+// =====================================================
+bool bull2BR = close[1] < open[1] and close > high[1] and low <= low[1]
+bool bear2BR = close[1] > open[1] and close < low[1] and high >= high[1]
+
+bool bullStoppingPotential = (low < low[1] or sweepLow) and wideBar and climaxVol and closeUpper60
+bool bearStoppingPotential = (high > high[1] or sweepHigh) and wideBar and climaxVol and closeLower40
+
+bool bullShakeout = sweepLow and wideBar and climaxVol and closeUpper60 and close > open and close > nz(lastSwingLow, low)
+bool bearUpthrust = sweepHigh and wideBar and climaxVol and closeLower40 and close < open and close < nz(lastSwingHigh, high)
+
+bool bullTestPotential = (low < low[1] or sweepLow) and quietVol and not wideBar and closeUpper60 and close >= open
+bool bearTestPotential = (high > high[1] or sweepHigh) and quietVol and not wideBar and closeLower40 and close <= open
+
+bool bullAbsorb = sweepLow and effortVol and closeUpper60 and close >= open
+bool bearAbsorb = sweepHigh and effortVol and closeLower40 and close <= open
+
+bool bullNoAcceptLower = sweepLow and closeUpper60 and close > nz(lastSwingLow, low) and high > high[1]
+bool bearNoAcceptUpper = sweepHigh and closeLower40 and close < nz(lastSwingHigh, high) and low < low[1]
+
+// =====================================================
+// SCALP-4: MANIPULATION PHASE (run/sweep/reclaim/absorption)
+// =====================================================
+float runOnLqNearAtr = 0.35
+int manipulationReclaimWindowBars = 8
+float reclaimBodyAtrMin = 0.08
+
+bool bullContinuationDrive = emaFast >= emaSlow and close > open and close >= close[1]
+bool bearContinuationDrive = emaFast <= emaSlow and close < open and close <= close[1]
+
+bool bullRunOnLiquidity = bullContinuationDrive and not na(lastSwingHigh) and high >= lastSwingHigh - atr * runOnLqNearAtr and close <= lastSwingHigh + atr * runOnLqNearAtr and not sweepHigh
+bool bearRunOnLiquidity = bearContinuationDrive and not na(lastSwingLow) and low <= lastSwingLow + atr * runOnLqNearAtr and close >= lastSwingLow - atr * runOnLqNearAtr and not sweepLow
+
+bool bullOrdinaryContinuation = bullContinuationDrive and not bullRunOnLiquidity
+bool bearOrdinaryContinuation = bearContinuationDrive and not bearRunOnLiquidity
+
+bool bullSweepOfLiquidity = not na(lastSwingLow) and low < lastSwingLow - minPen
+bool bearSweepOfLiquidity = not na(lastSwingHigh) and high > lastSwingHigh + minPen
+
+var float bullSweptLevel = na
+var float bearSweptLevel = na
+var int bullSweepBar = na
+var int bearSweepBar = na
+
+if bullSweepOfLiquidity
+    bullSweptLevel := lastSwingLow
+    bullSweepBar := bar_index
+if bearSweepOfLiquidity
+    bearSweptLevel := lastSwingHigh
+    bearSweepBar := bar_index
+
+int bullSweepAge = not na(bullSweepBar) ? bar_index - bullSweepBar : 999
+int bearSweepAge = not na(bearSweepBar) ? bar_index - bearSweepBar : 999
+bool bullSweepWindowActive = not na(bullSweptLevel) and bullSweepAge <= manipulationReclaimWindowBars
+bool bearSweepWindowActive = not na(bearSweptLevel) and bearSweepAge <= manipulationReclaimWindowBars
+
+bool bullReclaimAfterSweep = bullSweepWindowActive and close > bullSweptLevel and (close[1] <= bullSweptLevel or low[1] <= bullSweptLevel) and closeUpper60 and close > open and (close - open) >= atr * reclaimBodyAtrMin
+bool bearReclaimAfterSweep = bearSweepWindowActive and close < bearSweptLevel and (close[1] >= bearSweptLevel or high[1] >= bearSweptLevel) and closeLower40 and close < open and (open - close) >= atr * reclaimBodyAtrMin
+
+if bullReclaimAfterSweep
+    bullSweptLevel := na
+    bullSweepBar := na
+if bearReclaimAfterSweep
+    bearSweptLevel := na
+    bearSweepBar := na
+
+bool bullReclaim2CrConfirm = bullReclaimAfterSweep and bull2BR
+bool bearReclaim2CrConfirm = bearReclaimAfterSweep and bear2BR
+
+bool bullAbsorptionAfterSweep = (bullSweepWindowActive or bullReclaimAfterSweep) and (bullAbsorb or (effortVol and closeUpper60 and close > open and low <= nz(lastSwingLow, low)))
+bool bearAbsorptionAfterSweep = (bearSweepWindowActive or bearReclaimAfterSweep) and (bearAbsorb or (effortVol and closeLower40 and close < open and high >= nz(lastSwingHigh, high)))
+
+bool bullManipulationRisk = bullSweepWindowActive and not bullReclaimAfterSweep and not bullAbsorptionAfterSweep
+bool bearManipulationRisk = bearSweepWindowActive and not bearReclaimAfterSweep and not bearAbsorptionAfterSweep
+
+bool bullManipulationSupport = bullReclaimAfterSweep or bullAbsorptionAfterSweep
+bool bearManipulationSupport = bearReclaimAfterSweep or bearAbsorptionAfterSweep
+
+string bullManipulationText = bullReclaimAfterSweep ? (bullReclaim2CrConfirm ? "Reclaim after sweep + bull 2CR" : "Reclaim after sweep") :
+     bullAbsorptionAfterSweep ? "Absorption after sweep" :
+     bullSweepWindowActive ? "Sweep of liquidity (bull side pending reclaim)" :
+     bullRunOnLiquidity ? "Run on liquidity (distinct from ordinary continuation)" :
+     bullOrdinaryContinuation ? "Ordinary continuation (no liquidity run)" :
+     "No manipulation event"
+
+string bearManipulationText = bearReclaimAfterSweep ? (bearReclaim2CrConfirm ? "Reclaim after sweep + bear 2CR" : "Reclaim after sweep") :
+     bearAbsorptionAfterSweep ? "Absorption after sweep" :
+     bearSweepWindowActive ? "Sweep of liquidity (bear side pending reclaim)" :
+     bearRunOnLiquidity ? "Run on liquidity (distinct from ordinary continuation)" :
+     bearOrdinaryContinuation ? "Ordinary continuation (no liquidity run)" :
+     "No manipulation event"
+
+bool bullEffortResultPotential = effortVol and wideBar and closeNearHigh and close > high[1]
+bool bearEffortResultPotential = effortVol and wideBar and closeNearLow and close < low[1]
+
+int bullBgSeedSinceCore = nz(ta.barssince(bullStoppingPotential[1] or bullShakeout[1] or bullAbsorb[1] or bullEffortResultPotential[1] or sweepLow[1]), 1000)
+int bearBgSeedSinceCore = nz(ta.barssince(bearStoppingPotential[1] or bearUpthrust[1] or bearAbsorb[1] or bearEffortResultPotential[1] or sweepHigh[1]), 1000)
+int bullBgAcceptedSinceCore = nz(ta.barssince(bullAcceptedNow[1] > 0), 1000)
+int bearBgAcceptedSinceCore = nz(ta.barssince(bearAcceptedNow[1] > 0), 1000)
+
+float bullBackgroundCore = 50.0
+bullBackgroundCore += recencyPoints(bullBgSeedSinceCore, 6, 16.0)
+bullBackgroundCore += recencyPoints(bullBgAcceptedSinceCore, 8, 8.0)
+bullBackgroundCore -= recencyPoints(bearBgSeedSinceCore, 6, 15.0)
+bullBackgroundCore -= recencyPoints(bearBgAcceptedSinceCore, 8, 6.0)
+bullBackgroundCore := clamp100(bullBackgroundCore)
+
+float bearBackgroundCore = 50.0
+bearBackgroundCore += recencyPoints(bearBgSeedSinceCore, 6, 16.0)
+bearBackgroundCore += recencyPoints(bearBgAcceptedSinceCore, 8, 8.0)
+bearBackgroundCore -= recencyPoints(bullBgSeedSinceCore, 6, 15.0)
+bearBackgroundCore -= recencyPoints(bullBgAcceptedSinceCore, 8, 6.0)
+bearBackgroundCore := clamp100(bearBackgroundCore)
+
+bool bullBackgroundSupportCore = bullBackgroundCore >= 54.0
+bool bearBackgroundSupportCore = bearBackgroundCore >= 54.0
+
+bool bullTestBgMissing = bullTestPotential and not bullBackgroundSupportCore
+bool bearTestBgMissing = bearTestPotential and not bearBackgroundSupportCore
+
+bool bullNoSupplyPotential = narrowBar and dryVol and low <= low[1] and closeUpper60 and close >= open and not sweepHigh and (bullStoppingPotential[1] or bullShakeout[1] or bullAbsorb[1] or bullTestPotential[1])
+bool bearNoDemandPotential = narrowBar and dryVol and high >= high[1] and closeLower40 and close <= open and not sweepLow and (bearStoppingPotential[1] or bearUpthrust[1] or bearAbsorb[1] or bearTestPotential[1])
+
+bool bullNoSupplyBgMissing = bullNoSupplyPotential and not bullBackgroundSupportCore
+bool bearNoDemandBgMissing = bearNoDemandPotential and not bearBackgroundSupportCore
+
+bool bullTest = bullTestPotential and bullBackgroundSupportCore
+bool bearTest = bearTestPotential and bearBackgroundSupportCore
+bool bullNoSupply = bullNoSupplyPotential and bullBackgroundSupportCore
+bool bearNoDemand = bearNoDemandPotential and bearBackgroundSupportCore
+
+bool bullAbsorbConfirmed = bullAbsorb[1] and close > high[1]
+bool bearAbsorbConfirmed = bearAbsorb[1] and close < low[1]
+bool bullStoppingConfirmed = bullStoppingPotential[1] and close > high[1]
+bool bearStoppingConfirmed = bearStoppingPotential[1] and close < low[1]
+bool bullShakeoutConfirmed = bullShakeout[1] and close > high[1]
+bool bearUpthrustConfirmed = bearUpthrust[1] and close < low[1]
+bool bullTestConfirmed = bullTest[1] and close > high[1]
+bool bearTestConfirmed = bearTest[1] and close < low[1]
+bool bullNoSupplyConfirmed = bullNoSupply[1] and close > high[1]
+bool bearNoDemandConfirmed = bearNoDemand[1] and close < low[1]
+
+bool bullTestFailed = bullTest[1] and close < low[1]
+bool bearTestFailed = bearTest[1] and close > high[1]
+bool bullNoSupplyFailed = bullNoSupply[1] and close < low[1]
+bool bearNoDemandFailed = bearNoDemand[1] and close > high[1]
+
+bool bullNoFollowDown = bullStoppingConfirmed or bullShakeoutConfirmed or bullAbsorbConfirmed or bullTestConfirmed or bullNoSupplyConfirmed
+bool bearNoFollowUp = bearStoppingConfirmed or bearUpthrustConfirmed or bearAbsorbConfirmed or bearTestConfirmed or bearNoDemandConfirmed
+
+bool bullEffortResultConfirmed = bullEffortResultPotential or (bullEffortResultPotential[1] and close > high[1])
+bool bearEffortResultConfirmed = bearEffortResultPotential or (bearEffortResultPotential[1] and close < low[1])
+bool bullEffortResultFailed = bullEffortResultPotential[1] and close < low[1]
+bool bearEffortResultFailed = bearEffortResultPotential[1] and close > high[1]
+
+bool bullStopping = bullStoppingPotential
+bool bearStopping = bearStoppingPotential
+bool bullEffortResult = bullEffortResultPotential
+bool bearEffortResult = bearEffortResultPotential
+bool bullFailedTest = bearTestFailed
+bool bearFailedTest = bullTestFailed
+
+bool bullTriggerPotentialRaw = bullStopping or bullShakeout or bullTest or bullNoSupply or bullAbsorb or bullNoAcceptLower or bull2BR or bullEffortResult
+bool bearTriggerPotentialRaw = bearStopping or bearUpthrust or bearTest or bearNoDemand or bearAbsorb or bearNoAcceptUpper or bear2BR or bearEffortResult
+
+bool bullTriggerConfirmedRaw = bullStoppingConfirmed or bullShakeoutConfirmed or bullTestConfirmed or bullNoSupplyConfirmed or bullAbsorbConfirmed or bullEffortResultConfirmed or bullNoFollowDown or bullFailedTest or bull2BR
+bool bearTriggerConfirmedRaw = bearStoppingConfirmed or bearUpthrustConfirmed or bearTestConfirmed or bearNoDemandConfirmed or bearAbsorbConfirmed or bearEffortResultConfirmed or bearNoFollowUp or bearFailedTest or bear2BR
+
+bool bullReactionRaw = bullStopping or bullShakeout or bullTest or bullNoSupply or bull2BR or bullNoFollowDown or bullAbsorb or bullNoAcceptLower or bullFailedTest
+bool bearReactionRaw = bearStopping or bearUpthrust or bearTest or bearNoDemand or bear2BR or bearNoFollowUp or bearAbsorb or bearNoAcceptUpper or bearFailedTest
+
+bool bullContinuationRaw = bullEffortResultConfirmed or (close > emaFast and emaFast > emaSlow and upVol5 > downVol5 * 1.05 and upRange5 > downRange5 * 1.02 and closeNearHigh and high >= high[1])
+bool bearContinuationRaw = bearEffortResultConfirmed or (close < emaFast and emaFast < emaSlow and downVol5 > upVol5 * 1.05 and downRange5 > upRange5 * 1.02 and closeNearLow and low <= low[1])
+
+bool bullSignalRaw = bullReactionRaw or bullContinuationRaw
+bool bearSignalRaw = bearReactionRaw or bearContinuationRaw
+
+bool recentBullSignal = nz(ta.barssince(bullSignalRaw), 1000) <= 5
+bool recentBearSignal = nz(ta.barssince(bearSignalRaw), 1000) <= 5
+
+bool bullMicroBreak = close > highestPrevMicro and closeUpper60
+bool bearMicroBreak = close < lowestPrevMicro and closeLower40
+
+string bullTriggerText =
+     bullShakeoutConfirmed ? "Shakeout confirmed" :
+     bullShakeout ? "Shakeout potential" :
+     bullStoppingConfirmed ? "Stopping Volume confirmed" :
+     bullStopping ? "Stopping Volume potential" :
+     bullFailedTest ? "Failed bear test" :
+     bullAbsorbConfirmed ? "Absorption confirmed" :
+     bullAbsorb ? "Absorption potential" :
+     bull2BR ? "2BR" :
+     bullTestConfirmed ? "Test confirmed" :
+     bullTest ? "Test potential" :
+     bullTestBgMissing ? "Test potential / bg missing" :
+     bullNoSupplyConfirmed ? "No Supply confirmed" :
+     bullNoSupply ? "No Supply potential" :
+     bullNoSupplyBgMissing ? "No Supply potential / bg missing" :
+     bullNoAcceptLower ? "No acceptance lower" :
+     bullNoFollowDown ? "No follow down" :
+     bullEffortResultConfirmed ? "Effort/Result confirmed" :
+     bullEffortResult ? "Effort/Result potential" :
+     bullContinuationRaw ? "Continuation" : "Brak"
+
+string bearTriggerText =
+     bearUpthrustConfirmed ? "Upthrust confirmed" :
+     bearUpthrust ? "Upthrust potential" :
+     bearStoppingConfirmed ? "Stopping Volume confirmed" :
+     bearStopping ? "Stopping Volume potential" :
+     bearFailedTest ? "Failed bull test" :
+     bearAbsorbConfirmed ? "Absorption confirmed" :
+     bearAbsorb ? "Absorption potential" :
+     bear2BR ? "2BR" :
+     bearTestConfirmed ? "Test confirmed" :
+     bearTest ? "Test potential" :
+     bearTestBgMissing ? "Test potential / bg missing" :
+     bearNoDemandConfirmed ? "No Demand confirmed" :
+     bearNoDemand ? "No Demand potential" :
+     bearNoDemandBgMissing ? "No Demand potential / bg missing" :
+     bearNoAcceptUpper ? "No acceptance upper" :
+     bearNoFollowUp ? "No follow up" :
+     bearEffortResultConfirmed ? "Effort/Result confirmed" :
+     bearEffortResult ? "Effort/Result potential" :
+     bearContinuationRaw ? "Continuation" : "Brak"
+
+bool bullTriggerActive = bullReactionRaw or bullContinuationRaw
+bool bearTriggerActive = bearReactionRaw or bearContinuationRaw
+
+// =====================================================
+// LTF CONFIRM ENGINE
+// =====================================================
+bool hasLtf1 = execTf == "5" or execTf == "15"
+bool hasLtf2 = execTf == "15"
+bool hasAnyLtf = hasLtf1 or hasLtf2
+
+string ltf1Tf = execTf == "5" ? "1" : execTf == "15" ? "5" : "5"
+string ltf2Tf = "1"
+
+// Perf: avoid unnecessary LTF security calls on profiles that do not use a given LTF stream.
+ltfSecurityPack(_enabled, _tf) =>
+    if _enabled
+        request.security(syminfo.tickerid, _tf, ltfPack(), lookahead=barmerge.lookahead_off)
+    else
+        [false, false, false, false, false, false, false, false, false, false, false, false]
+
+[ltf1BullTrendRaw, ltf1BearTrendRaw, ltf1BullReactionRaw, ltf1BearReactionRaw, ltf1BullContinuationRaw, ltf1BearContinuationRaw, ltf1BullFailureRaw, ltf1BearFailureRaw, ltf1BullMicroRaw, ltf1BearMicroRaw, ltf1BullSegmentRaw, ltf1BearSegmentRaw] = ltfSecurityPack(hasLtf1, ltf1Tf)
+[ltf2BullTrendRaw, ltf2BearTrendRaw, ltf2BullReactionRaw, ltf2BearReactionRaw, ltf2BullContinuationRaw, ltf2BearContinuationRaw, ltf2BullFailureRaw, ltf2BearFailureRaw, ltf2BullMicroRaw, ltf2BearMicroRaw, ltf2BullSegmentRaw, ltf2BearSegmentRaw] = ltfSecurityPack(hasLtf2, ltf2Tf)
+
+float ltf1BullPulse = hasLtf1 ? bullPulseFromPack(ltf1BullTrendRaw, ltf1BullReactionRaw, ltf1BullContinuationRaw, ltf1BearFailureRaw, ltf1BullMicroRaw, ltf1BullSegmentRaw) : 0.0
+float ltf1BearPulse = hasLtf1 ? bearPulseFromPack(ltf1BearTrendRaw, ltf1BearReactionRaw, ltf1BearContinuationRaw, ltf1BullFailureRaw, ltf1BearMicroRaw, ltf1BearSegmentRaw) : 0.0
+
+float ltf2BullPulse = hasLtf2 ? bullPulseFromPack(ltf2BullTrendRaw, ltf2BullReactionRaw, ltf2BullContinuationRaw, ltf2BearFailureRaw, ltf2BullMicroRaw, ltf2BullSegmentRaw) : 0.0
+float ltf2BearPulse = hasLtf2 ? bearPulseFromPack(ltf2BearTrendRaw, ltf2BearReactionRaw, ltf2BearContinuationRaw, ltf2BullFailureRaw, ltf2BearMicroRaw, ltf2BearSegmentRaw) : 0.0
+
+float ltf1Weight = execTf == "5" ? 1.00 : execTf == "15" ? 1.10 : 0.0
+float ltf2Weight = execTf == "15" ? 0.45 : 0.0
+
+float ltfBullPulse = ltf1BullPulse * ltf1Weight + ltf2BullPulse * ltf2Weight
+float ltfBearPulse = ltf1BearPulse * ltf1Weight + ltf2BearPulse * ltf2Weight
+
+float ltf1Delta = hasLtf1 ? (ltf1BullPulse - ltf1BearPulse) : na
+float ltf2Delta = hasLtf2 ? (ltf2BullPulse - ltf2BearPulse) : na
+float ltfDelta = hasAnyLtf ? ltfBullPulse - ltfBearPulse : 0.0
+float ltfBullAdj = hasAnyLtf ? math.max(-8.0, math.min(8.0, ltfDelta * 0.90)) : 0.0
+float ltfBearAdj = hasAnyLtf ? math.max(-8.0, math.min(8.0, -ltfDelta * 0.90)) : 0.0
+
+float ltfEntrySoftThreshold = 1.5
+float ltfEntryBlockThreshold = 4.5
+
+bool ltfBullSoft = not hasAnyLtf or ltfDelta >= ltfEntrySoftThreshold
+bool ltfBearSoft = not hasAnyLtf or ltfDelta <= -ltfEntrySoftThreshold
+bool ltfLongBlocked = hasAnyLtf and ltfDelta <= -ltfEntryBlockThreshold
+bool ltfShortBlocked = hasAnyLtf and ltfDelta >= ltfEntryBlockThreshold
+
+// =====================================================
+// DYNAMIC SEGMENT ENGINE
+// =====================================================
+int bullSegBars = not na(lastSwingLowBar) ? clipLen(bar_index - lastSwingLowBar, 4, segmentMaxLen) : 8
+int bearSegBars = not na(lastSwingHighBar) ? clipLen(bar_index - lastSwingHighBar, 4, segmentMaxLen) : 8
+
+[upVolSegBull, downVolSegBull, upRangeSegBull, downRangeSegBull, upVolSegBear, downVolSegBear, upRangeSegBear, downRangeSegBear] = dualSegmentDirectionalFlow(bullSegBars, bearSegBars)
+
+float bullSegPct = segmentPctFromFlow(emaFast > emaSlow, upVolSegBull, downVolSegBull, upRangeSegBull, downRangeSegBull, recentBullSignal, bullNoAcceptLower, bullEffortResult)
+float bearSegPct = segmentPctFromFlow(emaFast < emaSlow, downVolSegBear, upVolSegBear, downRangeSegBear, upRangeSegBear, recentBearSignal, bearNoAcceptUpper, bearEffortResult)
+
+string segmentState = bullSegPct > bearSegPct + 8 ? "Bull segment" : bearSegPct > bullSegPct + 8 ? "Bear segment" : "Neutral"
+
+// =====================================================
+// ZONES: TWO-LAYER HIERARCHY PER SIDE
+// =====================================================
+var float bull1Top = na
+var float bull1Bot = na
+var int bull1Bar = na
+var string bull1Type = ""
+var int bull1Touches = 0
+var bool bull1Failed = false
+var float bull1Strength = na
+var int bull1BreakStreak = 0
+
+var float bull2Top = na
+var float bull2Bot = na
+var int bull2Bar = na
+var string bull2Type = ""
+var int bull2Touches = 0
+var bool bull2Failed = false
+var float bull2Strength = na
+var int bull2BreakStreak = 0
+
+var float bear1Top = na
+var float bear1Bot = na
+var int bear1Bar = na
+var string bear1Type = ""
+var int bear1Touches = 0
+var bool bear1Failed = false
+var float bear1Strength = na
+var int bear1BreakStreak = 0
+
+var float bear2Top = na
+var float bear2Bot = na
+var int bear2Bar = na
+var string bear2Type = ""
+var int bear2Touches = 0
+var bool bear2Failed = false
+var float bear2Strength = na
+var int bear2BreakStreak = 0
+
+bool bullCreateZone = bullStopping or bullAbsorb or bull2BR or bullTest or bullNoSupply or bullEffortResult or bullNoAcceptLower
+bool bearCreateZone = bearStopping or bearAbsorb or bear2BR or bearTest or bearNoDemand or bearEffortResult or bearNoAcceptUpper
+
+if barstate.isconfirmed and bullCreateZone
+    float newTop = high
+    float newBot = low
+    string newType = bullTriggerText
+    float newStrength = bullStopping ? 88.0 : bullAbsorb ? 84.0 : bull2BR ? 80.0 : bullEffortResult ? 76.0 : bullTest ? 72.0 : bullNoSupply ? 68.0 : bullNoAcceptLower ? 74.0 : 62.0
+
+    if bullStopping
+        newTop := math.max(open, close)
+        newBot := low
+    else if bullAbsorb
+        newTop := math.max(open, close)
+        newBot := low
+    else if bullTest
+        newTop := low + rangeNow * 0.58
+        newBot := low
+    else if bullNoSupply
+        newTop := low + rangeNow * 0.50
+        newBot := low
+    else if bull2BR
+        newTop := math.max(close, open[1])
+        newBot := math.min(low, low[1])
+    else if bullEffortResult
+        newTop := close
+        newBot := low
+    else if bullNoAcceptLower
+        newTop := math.max(open, close)
+        newBot := low
+
+    bull2Top := bull1Top
+    bull2Bot := bull1Bot
+    bull2Bar := bull1Bar
+    bull2Type := bull1Type
+    bull2Touches := bull1Touches
+    bull2Failed := bull1Failed
+    bull2Strength := bull1Strength
+    bull2BreakStreak := bull1BreakStreak
+
+    bull1Top := math.max(newTop, newBot)
+    bull1Bot := math.min(newTop, newBot)
+    bull1Bar := bar_index
+    bull1Type := newType
+    bull1Touches := 0
+    bull1Failed := false
+    bull1Strength := newStrength
+    bull1BreakStreak := 0
+
+if barstate.isconfirmed and bearCreateZone
+    float newTop = high
+    float newBot = low
+    string newType = bearTriggerText
+    float newStrength = bearStopping ? 88.0 : bearAbsorb ? 84.0 : bear2BR ? 80.0 : bearEffortResult ? 76.0 : bearTest ? 72.0 : bearNoDemand ? 68.0 : bearNoAcceptUpper ? 74.0 : 62.0
+
+    if bearStopping
+        newTop := high
+        newBot := math.min(open, close)
+    else if bearAbsorb
+        newTop := high
+        newBot := math.min(open, close)
+    else if bearTest
+        newTop := high
+        newBot := high - rangeNow * 0.58
+    else if bearNoDemand
+        newTop := high
+        newBot := high - rangeNow * 0.50
+    else if bear2BR
+        newTop := math.max(high, high[1])
+        newBot := math.min(close, open[1])
+    else if bearEffortResult
+        newTop := high
+        newBot := close
+    else if bearNoAcceptUpper
+        newTop := high
+        newBot := math.min(open, close)
+
+    bear2Top := bear1Top
+    bear2Bot := bear1Bot
+    bear2Bar := bear1Bar
+    bear2Type := bear1Type
+    bear2Touches := bear1Touches
+    bear2Failed := bear1Failed
+    bear2Strength := bear1Strength
+    bear2BreakStreak := bear1BreakStreak
+
+    bear1Top := math.max(newTop, newBot)
+    bear1Bot := math.min(newTop, newBot)
+    bear1Bar := bar_index
+    bear1Type := newType
+    bear1Touches := 0
+    bear1Failed := false
+    bear1Strength := newStrength
+    bear1BreakStreak := 0
+
+bool bull1AgeOk = not na(bull1Bar) and bar_index - bull1Bar <= zoneLifeBars
+bool bull2AgeOk = not na(bull2Bar) and bar_index - bull2Bar <= zoneLifeBars
+bool bear1AgeOk = not na(bear1Bar) and bar_index - bear1Bar <= zoneLifeBars
+bool bear2AgeOk = not na(bear2Bar) and bar_index - bear2Bar <= zoneLifeBars
+
+bool bull1TouchNow = bull1AgeOk and bar_index > bull1Bar and zoneTouched(bull1Top, bull1Bot)
+bool bull2TouchNow = bull2AgeOk and bar_index > bull2Bar and zoneTouched(bull2Top, bull2Bot)
+bool bear1TouchNow = bear1AgeOk and bar_index > bear1Bar and zoneTouched(bear1Top, bear1Bot)
+bool bear2TouchNow = bear2AgeOk and bar_index > bear2Bar and zoneTouched(bear2Top, bear2Bot)
+
+if bull1TouchNow and not bull1TouchNow[1]
+    bull1Touches += 1
+if bull2TouchNow and not bull2TouchNow[1]
+    bull2Touches += 1
+if bear1TouchNow and not bear1TouchNow[1]
+    bear1Touches += 1
+if bear2TouchNow and not bear2TouchNow[1]
+    bear2Touches += 1
+
+bool bull1BreakNow = bull1AgeOk and close < zoneBottom(bull1Top, bull1Bot) - atr * zoneBreakAtr
+bool bull2BreakNow = bull2AgeOk and close < zoneBottom(bull2Top, bull2Bot) - atr * zoneBreakAtr
+bool bear1BreakNow = bear1AgeOk and close > zoneTop(bear1Top, bear1Bot) + atr * zoneBreakAtr
+bool bear2BreakNow = bear2AgeOk and close > zoneTop(bear2Top, bear2Bot) + atr * zoneBreakAtr
+
+bull1BreakStreak := bull1BreakNow ? bull1BreakStreak + 1 : 0
+bull2BreakStreak := bull2BreakNow ? bull2BreakStreak + 1 : 0
+bear1BreakStreak := bear1BreakNow ? bear1BreakStreak + 1 : 0
+bear2BreakStreak := bear2BreakNow ? bear2BreakStreak + 1 : 0
+
+if bull1BreakStreak >= 2
+    bull1Failed := true
+if bull2BreakStreak >= 2
+    bull2Failed := true
+if bear1BreakStreak >= 2
+    bear1Failed := true
+if bear2BreakStreak >= 2
+    bear2Failed := true
+
+bool bull1Active = bull1AgeOk and not bull1Failed and not na(bull1Top) and not na(bull1Bot)
+bool bull2Active = bull2AgeOk and not bull2Failed and not na(bull2Top) and not na(bull2Bot)
+bool bear1Active = bear1AgeOk and not bear1Failed and not na(bear1Top) and not na(bear1Bot)
+bool bear2Active = bear2AgeOk and not bear2Failed and not na(bear2Top) and not na(bear2Bot)
+
+bool bull1Near = bull1Active and (zoneTouched(bull1Top, bull1Bot) or nearLevel(close, zoneMid(bull1Top, bull1Bot), 0.50))
+bool bull2Near = bull2Active and (zoneTouched(bull2Top, bull2Bot) or nearLevel(close, zoneMid(bull2Top, bull2Bot), 0.50))
+bool bear1Near = bear1Active and (zoneTouched(bear1Top, bear1Bot) or nearLevel(close, zoneMid(bear1Top, bear1Bot), 0.50))
+bool bear2Near = bear2Active and (zoneTouched(bear2Top, bear2Bot) or nearLevel(close, zoneMid(bear2Top, bear2Bot), 0.50))
+
+float bull1Rel = bull1Active ? nz(bull1Strength, 0) * 0.45 + (bull1Near ? 12 : 0) + touchScore(bull1Touches) - agePenalty(bull1Bar) - math.abs(close - zoneMid(bull1Top, bull1Bot)) / math.max(atr, syminfo.mintick) * 5.0 : -1000.0
+float bull2Rel = bull2Active ? nz(bull2Strength, 0) * 0.45 + (bull2Near ? 12 : 0) + touchScore(bull2Touches) - agePenalty(bull2Bar) - math.abs(close - zoneMid(bull2Top, bull2Bot)) / math.max(atr, syminfo.mintick) * 5.0 : -1000.0
+float bear1Rel = bear1Active ? nz(bear1Strength, 0) * 0.45 + (bear1Near ? 12 : 0) + touchScore(bear1Touches) - agePenalty(bear1Bar) - math.abs(close - zoneMid(bear1Top, bear1Bot)) / math.max(atr, syminfo.mintick) * 5.0 : -1000.0
+float bear2Rel = bear2Active ? nz(bear2Strength, 0) * 0.45 + (bear2Near ? 12 : 0) + touchScore(bear2Touches) - agePenalty(bear2Bar) - math.abs(close - zoneMid(bear2Top, bear2Bot)) / math.max(atr, syminfo.mintick) * 5.0 : -1000.0
+
+bool useBull1 = bull1Rel >= bull2Rel
+bool useBear1 = bear1Rel >= bear2Rel
+
+bool selBullActive = useBull1 ? bull1Active : bull2Active
+float selBullTop = useBull1 ? bull1Top : bull2Top
+float selBullBot = useBull1 ? bull1Bot : bull2Bot
+int selBullBar = useBull1 ? bull1Bar : bull2Bar
+string selBullType = useBull1 ? bull1Type : bull2Type
+int selBullTouches = useBull1 ? bull1Touches : bull2Touches
+float selBullStrength = useBull1 ? bull1Strength : bull2Strength
+bool selBullNear = useBull1 ? bull1Near : bull2Near
+bool selBullFresh = selBullTouches == 0
+
+bool selBearActive = useBear1 ? bear1Active : bear2Active
+float selBearTop = useBear1 ? bear1Top : bear2Top
+float selBearBot = useBear1 ? bear1Bot : bear2Bot
+int selBearBar = useBear1 ? bear1Bar : bear2Bar
+string selBearType = useBear1 ? bear1Type : bear2Type
+int selBearTouches = useBear1 ? bear1Touches : bear2Touches
+float selBearStrength = useBear1 ? bear1Strength : bear2Strength
+bool selBearNear = useBear1 ? bear1Near : bear2Near
+bool selBearFresh = selBearTouches == 0
+
+// =====================================================
+// FIB CONTEXT: LOCATION / TARGETS
+// =====================================================
+int bullFibLookback = 0
+if fibAnchorMode == "ZoneImpulse" and selBullActive and not na(selBullBar)
+    bullFibLookback := clipLen(bar_index - selBullBar + 1, 2, 80)
+else if not na(lastSwingLowBar)
+    bullFibLookback := clipLen(bar_index - lastSwingLowBar + 1, 2, 80)
+
+int bearFibLookback = 0
+if fibAnchorMode == "ZoneImpulse" and selBearActive and not na(selBearBar)
+    bearFibLookback := clipLen(bar_index - selBearBar + 1, 2, 80)
+else if not na(lastSwingHighBar)
+    bearFibLookback := clipLen(bar_index - lastSwingHighBar + 1, 2, 80)
+
+float bullFibAnchorLow = fibAnchorMode == "ZoneImpulse" and selBullActive ? zoneBottom(selBullTop, selBullBot) : lastSwingLow
+float bearFibAnchorHigh = fibAnchorMode == "ZoneImpulse" and selBearActive ? zoneTop(selBearTop, selBearBot) : lastSwingHigh
+
+int bullFibLookbackSafe = math.max(bullFibLookback, 1)
+int bearFibLookbackSafe = math.max(bearFibLookback, 1)
+float bullFibAnchorHighRaw = ta.highest(high, bullFibLookbackSafe)
+float bearFibAnchorLowRaw = ta.lowest(low, bearFibLookbackSafe)
+float bullFibAnchorHigh = bullFibLookback >= 2 ? bullFibAnchorHighRaw : na
+float bearFibAnchorLow = bearFibLookback >= 2 ? bearFibAnchorLowRaw : na
+
+float bullFibLeg = not na(bullFibAnchorLow) and not na(bullFibAnchorHigh) and bullFibAnchorHigh > bullFibAnchorLow ? bullFibAnchorHigh - bullFibAnchorLow : na
+float bearFibLeg = not na(bearFibAnchorHigh) and not na(bearFibAnchorLow) and bearFibAnchorHigh > bearFibAnchorLow ? bearFibAnchorHigh - bearFibAnchorLow : na
+
+bool bullFibLegValid = useFibContext and not na(bullFibLeg) and bullFibLeg / math.max(atr, syminfo.mintick) >= fibMinLegAtr
+bool bearFibLegValid = useFibContext and not na(bearFibLeg) and bearFibLeg / math.max(atr, syminfo.mintick) >= fibMinLegAtr
+
+float bullFib382 = bullFibLegValid and fibUse382 ? fibRetraceLevelBull(bullFibAnchorLow, bullFibAnchorHigh, 0.382) : na
+float bullFib50 = bullFibLegValid and fibUse50 ? fibRetraceLevelBull(bullFibAnchorLow, bullFibAnchorHigh, 0.50) : na
+float bullFib618 = bullFibLegValid and fibUse618 ? fibRetraceLevelBull(bullFibAnchorLow, bullFibAnchorHigh, 0.618) : na
+float bullFib705 = bullFibLegValid and fibUse705 ? fibRetraceLevelBull(bullFibAnchorLow, bullFibAnchorHigh, 0.705) : na
+
+float bearFib382 = bearFibLegValid and fibUse382 ? fibRetraceLevelBear(bearFibAnchorHigh, bearFibAnchorLow, 0.382) : na
+float bearFib50 = bearFibLegValid and fibUse50 ? fibRetraceLevelBear(bearFibAnchorHigh, bearFibAnchorLow, 0.50) : na
+float bearFib618 = bearFibLegValid and fibUse618 ? fibRetraceLevelBear(bearFibAnchorHigh, bearFibAnchorLow, 0.618) : na
+float bearFib705 = bearFibLegValid and fibUse705 ? fibRetraceLevelBear(bearFibAnchorHigh, bearFibAnchorLow, 0.705) : na
+
+[bullFibClosestLvl, bullFibClosestDist] = pickClosestFib(close, fibUse382, bullFib382, fibUse50, bullFib50, fibUse618, bullFib618, fibUse705, bullFib705)
+[bearFibClosestLvl, bearFibClosestDist] = pickClosestFib(close, fibUse382, bearFib382, fibUse50, bearFib50, fibUse618, bearFib618, fibUse705, bearFib705)
+
+bool bullFibNear = bullFibLegValid and not na(bullFibClosestLvl) and bullFibClosestDist <= atr * fibRetraceTolAtr
+bool bearFibNear = bearFibLegValid and not na(bearFibClosestLvl) and bearFibClosestDist <= atr * fibRetraceTolAtr
+
+bool bullFibConfluence = bullFibNear and (selBullNear or sweepLow or nearLevel(close, nz(lastSwingLow, close), fibRetraceTolAtr * 1.2))
+bool bearFibConfluence = bearFibNear and (selBearNear or sweepHigh or nearLevel(close, nz(lastSwingHigh, close), fibRetraceTolAtr * 1.2))
+
+float bullFibLocationScore = bullFibConfluence ? fibLocationWeight : bullFibNear ? fibLocationWeight * 0.45 : 0.0
+float bearFibLocationScore = bearFibConfluence ? fibLocationWeight : bearFibNear ? fibLocationWeight * 0.45 : 0.0
+
+float bullFibProjection1272 = bullFibLegValid and fibUse1272 ? fibExtensionLevelBull(bullFibAnchorLow, bullFibAnchorHigh, 1.272) : na
+float bullFibProjection1618 = bullFibLegValid and fibUse1618 ? fibExtensionLevelBull(bullFibAnchorLow, bullFibAnchorHigh, 1.618) : na
+float bearFibProjection1272 = bearFibLegValid and fibUse1272 ? fibExtensionLevelBear(bearFibAnchorHigh, bearFibAnchorLow, 1.272) : na
+float bearFibProjection1618 = bearFibLegValid and fibUse1618 ? fibExtensionLevelBear(bearFibAnchorHigh, bearFibAnchorLow, 1.618) : na
+
+float bullFibInvalidation = bullFibConfluence ? bullFibClosestLvl : na
+float bearFibInvalidation = bearFibConfluence ? bearFibClosestLvl : na
+
+// =====================================================
+// FAILURE / CONFIRMATION (LOCAL VSA + ZONE INTEGRITY)
+// =====================================================
+// ETAP-1 marker: future survival module can hook post-failure diagnostics here (no runtime logic in this pass).
+bool bullFailureBase = bullTestFailed or bullNoSupplyFailed or bullEffortResultFailed or ((bullStoppingPotential[1] or bullShakeout[1] or bullAbsorb[1] or bull2BR[1] or bullNoAcceptLower[1]) and close < low[1])
+bool bearFailureBase = bearTestFailed or bearNoDemandFailed or bearEffortResultFailed or ((bearStoppingPotential[1] or bearUpthrust[1] or bearAbsorb[1] or bear2BR[1] or bearNoAcceptUpper[1]) and close > high[1])
+
+bool bullFailureRaw = bullFailureBase or (selBullActive and close < zoneBottom(selBullTop, selBullBot) - atr * zoneBreakAtr)
+bool bearFailureRaw = bearFailureBase or (selBearActive and close > zoneTop(selBearTop, selBearBot) + atr * zoneBreakAtr)
+
+bool bullConfirmBase = (bullTriggerConfirmedRaw or bullTriggerPotentialRaw[1] or recentBullSignal or selBullNear) and bullMicroBreak and close > open and closeUpper60
+bool bearConfirmBase = (bearTriggerConfirmedRaw or bearTriggerPotentialRaw[1] or recentBearSignal or selBearNear) and bearMicroBreak and close < open and closeLower40
+
+bool bullConfirmRaw = bullConfirmBase and not bearFailureRaw
+bool bearConfirmRaw = bearConfirmBase and not bullFailureRaw
+
+string failureText = bullFailureRaw and not bearFailureRaw ? "Bull failed" : bearFailureRaw and not bullFailureRaw ? "Bear failed" : "Brak"
+
+// =====================================================
+// DECISION CORE (CONTEXT -> LOCATION -> TRIGGER -> CONFIRM)
+// =====================================================
+// ETAP-1 marker: future liquidity-event gate can be attached after location scoring, before trigger aggregation.
+float bullContext = 0.0
+bullContext += emaFast > emaSlow ? 10 : 0
+bullContext += bullSegPct > bearSegPct + 6 ? 8 : bullSegPct > bearSegPct ? 5 : 0
+bullContext += softBullBias > softBearBias ? 7 : softBullBias == softBearBias ? 3 : 0
+
+float bearContext = 0.0
+bearContext += emaFast < emaSlow ? 10 : 0
+bearContext += bearSegPct > bullSegPct + 6 ? 8 : bearSegPct > bullSegPct ? 5 : 0
+bearContext += softBearBias > softBullBias ? 7 : softBearBias == softBullBias ? 3 : 0
+
+float bullLocation = 0.0
+bullLocation += selBullActive and selBullNear ? 12 : 0
+bullLocation += selBullActive ? touchScore(selBullTouches) : 0
+bullLocation += selBullActive ? math.min(nz(selBullStrength, 0) * 0.10, 8.0) : 0
+bullLocation += sweepLow ? 5 : 0
+bullLocation += bullFibLocationScore
+
+float bearLocation = 0.0
+bearLocation += selBearActive and selBearNear ? 12 : 0
+bearLocation += selBearActive ? touchScore(selBearTouches) : 0
+bearLocation += selBearActive ? math.min(nz(selBearStrength, 0) * 0.10, 8.0) : 0
+bearLocation += sweepHigh ? 5 : 0
+bearLocation += bearFibLocationScore
+
+float bullReactionTriggerScore = 0.0
+bullReactionTriggerScore := math.max(bullReactionTriggerScore, bullShakeout ? 18.5 : 0.0)
+bullReactionTriggerScore := math.max(bullReactionTriggerScore, bullStopping ? 18.0 : 0.0)
+bullReactionTriggerScore := math.max(bullReactionTriggerScore, bullAbsorb ? 17.0 : 0.0)
+bullReactionTriggerScore := math.max(bullReactionTriggerScore, bull2BR ? 16.0 : 0.0)
+bullReactionTriggerScore := math.max(bullReactionTriggerScore, bullFailedTest ? 15.5 : 0.0)
+bullReactionTriggerScore := math.max(bullReactionTriggerScore, bullNoFollowDown ? 16.0 : 0.0)
+bullReactionTriggerScore := math.max(bullReactionTriggerScore, bullNoAcceptLower ? 14.0 : 0.0)
+bullReactionTriggerScore := math.max(bullReactionTriggerScore, bullTest ? 13.0 : 0.0)
+bullReactionTriggerScore := math.max(bullReactionTriggerScore, bullNoSupply ? 12.5 : 0.0)
+
+float bearReactionTriggerScore = 0.0
+bearReactionTriggerScore := math.max(bearReactionTriggerScore, bearUpthrust ? 18.5 : 0.0)
+bearReactionTriggerScore := math.max(bearReactionTriggerScore, bearStopping ? 18.0 : 0.0)
+bearReactionTriggerScore := math.max(bearReactionTriggerScore, bearAbsorb ? 17.0 : 0.0)
+bearReactionTriggerScore := math.max(bearReactionTriggerScore, bear2BR ? 16.0 : 0.0)
+bearReactionTriggerScore := math.max(bearReactionTriggerScore, bearFailedTest ? 15.5 : 0.0)
+bearReactionTriggerScore := math.max(bearReactionTriggerScore, bearNoFollowUp ? 16.0 : 0.0)
+bearReactionTriggerScore := math.max(bearReactionTriggerScore, bearNoAcceptUpper ? 14.0 : 0.0)
+bearReactionTriggerScore := math.max(bearReactionTriggerScore, bearTest ? 13.0 : 0.0)
+bearReactionTriggerScore := math.max(bearReactionTriggerScore, bearNoDemand ? 12.5 : 0.0)
+
+float bullContinuationTriggerScore = bullEffortResultConfirmed ? 18.0 : bullContinuationRaw ? 12.0 : 0.0
+float bearContinuationTriggerScore = bearEffortResultConfirmed ? 18.0 : bearContinuationRaw ? 12.0 : 0.0
+
+float bullTriggerCarry = recentBullSignal and not bullReactionRaw and not bullContinuationRaw ? 3.0 : 0.0
+float bearTriggerCarry = recentBearSignal and not bearReactionRaw and not bearContinuationRaw ? 3.0 : 0.0
+
+float bullTrigger = math.max(bullReactionTriggerScore, bullContinuationTriggerScore)
+bullTrigger += bullReactionRaw and bullContinuationRaw ? 2.0 : 0.0
+bullTrigger += bullTriggerCarry
+
+float bearTrigger = math.max(bearReactionTriggerScore, bearContinuationTriggerScore)
+bearTrigger += bearReactionRaw and bearContinuationRaw ? 2.0 : 0.0
+bearTrigger += bearTriggerCarry
+
+float bullConfirmScore = bullConfirmRaw ? 18.0 : bullMicroBreak ? 10.0 : 0.0
+float bearConfirmScore = bearConfirmRaw ? 18.0 : bearMicroBreak ? 10.0 : 0.0
+
+float bullBaseScore = bullContext + bullLocation + bullTrigger + bullConfirmScore
+float bearBaseScore = bearContext + bearLocation + bearTrigger + bearConfirmScore
+
+float baseBullQuality = clamp100(bullBaseScore)
+float baseBearQuality = clamp100(bearBaseScore)
+
+// =====================================================
+// QUALITY LAYER: SCENARIO WEAKENING / CONTROL TRANSITION
+// =====================================================
+bool bullLeadBase = baseBullQuality > baseBearQuality + math.max(minSideGap - 1, 2) or (bullContinuationRaw and not bearContinuationRaw) or (recentBullSignal and not recentBearSignal)
+bool bearLeadBase = baseBearQuality > baseBullQuality + math.max(minSideGap - 1, 2) or (bearContinuationRaw and not bullContinuationRaw) or (recentBearSignal and not recentBullSignal)
+
+float bullWeakScore = 0.0
+if bullLeadBase
+    bullWeakScore += bearReactionRaw ? 2.0 : 0.0
+    bullWeakScore += bearContinuationRaw ? 2.0 : 0.0
+    bullWeakScore += bearMicroBreak ? 1.5 : 0.0
+    bullWeakScore += recentBearSignal ? 1.0 : 0.0
+    bullWeakScore += sweepHigh ? 0.75 : 0.0
+    bullWeakScore += close < emaFast ? 0.75 : 0.0
+    bullWeakScore += close < emaSlow ? 0.75 : 0.0
+    bullWeakScore += ltfDelta < -1.5 ? 1.25 : 0.0
+    bullWeakScore += not bullContinuationRaw ? 0.5 : 0.0
+    bullWeakScore += bullMicroBreak ? -0.5 : 0.0
+    bullWeakScore += bullContinuationRaw ? -0.75 : 0.0
+
+float bearWeakScore = 0.0
+if bearLeadBase
+    bearWeakScore += bullReactionRaw ? 2.0 : 0.0
+    bearWeakScore += bullContinuationRaw ? 2.0 : 0.0
+    bearWeakScore += bullMicroBreak ? 1.5 : 0.0
+    bearWeakScore += recentBullSignal ? 1.0 : 0.0
+    bearWeakScore += sweepLow ? 0.75 : 0.0
+    bearWeakScore += close > emaFast ? 0.75 : 0.0
+    bearWeakScore += close > emaSlow ? 0.75 : 0.0
+    bearWeakScore += ltfDelta > 1.5 ? 1.25 : 0.0
+    bearWeakScore += not bearContinuationRaw ? 0.5 : 0.0
+    bearWeakScore += bearMicroBreak ? -0.5 : 0.0
+    bearWeakScore += bearContinuationRaw ? -0.75 : 0.0
+
+bool bullWarning = bullLeadBase and not bullFailureRaw and bullWeakScore >= 4.5
+bool bearWarning = bearLeadBase and not bearFailureRaw and bearWeakScore >= 4.5
+
+if bullWarning and bearWarning
+    if bullWeakScore > bearWeakScore
+        bearWarning := false
+    else if bearWeakScore > bullWeakScore
+        bullWarning := false
+    else
+        bullWarning := false
+        bearWarning := false
+
+float bullWeakPenalty = bullWarning ? -6.0 : bullLeadBase and bullWeakScore >= 3.0 ? -2.5 : 0.0
+float bearWeakPenalty = bearWarning ? -6.0 : bearLeadBase and bearWeakScore >= 3.0 ? -2.5 : 0.0
+
+float bullTakeoverBoost = bearWarning ? 4.0 : bearLeadBase and bearWeakScore >= 3.0 ? 1.5 : 0.0
+float bearTakeoverBoost = bullWarning ? 4.0 : bullLeadBase and bullWeakScore >= 3.0 ? 1.5 : 0.0
+
+string bullWeakReason = (bearContinuationRaw ? "Bear continuation rising" : bearReactionRaw ? "Bear reaction rising" : "Bear pressure rising") + (ltfDelta < -1.5 ? " | LTF agrees" : "")
+string bearWeakReason = (bullContinuationRaw ? "Bull continuation rising" : bullReactionRaw ? "Bull reaction rising" : "Bull pressure rising") + (ltfDelta > 1.5 ? " | LTF agrees" : "")
+
+// =====================================================
+// ACCELERATION MODULE
+// =====================================================
+bool bullAccelContext = bullLeadBase or bullCascadeWeak or bullCascadeStrong or bullContinuationRaw or recentBullSignal
+bool bearAccelContext = bearLeadBase or bearCascadeWeak or bearCascadeStrong or bearContinuationRaw or recentBearSignal
+
+bool bullAccelStair = close > close[1] and close[1] >= close[2] and low >= low[1] - atr * 0.12
+bool bearAccelStair = close < close[1] and close[1] <= close[2] and high <= high[1] + atr * 0.12
+
+bool bullAccelReclaim = close[1] < open[1] and close > high[1] and closeUpper60
+bool bearAccelReject = close[1] > open[1] and close < low[1] and closeLower40
+
+bool bullAccelHold = close > emaFast and close > highestPrevMicro
+bool bearAccelHold = close < emaFast and close < lowestPrevMicro
+
+bool bullOppResponseWeak = not bearReactionRaw and not bearContinuationRaw and (high[1] <= high[2] or close > close[1])
+bool bearOppResponseWeak = not bullReactionRaw and not bullContinuationRaw and (low[1] >= low[2] or close < close[1])
+
+bool bullAccelProcessBase = bullAccelContext and bullAccelHold and (bullAccelStair or bullAccelReclaim or bullCascadeWeak)
+bool bearAccelProcessBase = bearAccelContext and bearAccelHold and (bearAccelStair or bearAccelReject or bearCascadeWeak)
+
+float bullAccelScore = 0.0
+if bullAccelContext
+    bullAccelScore += bullContinuationRaw ? 2.0 : 0.0
+    bullAccelScore += bullMicroBreak ? 1.25 : 0.0
+    bullAccelScore += bullAccelStair ? 1.50 : 0.0
+    bullAccelScore += bullAccelReclaim ? 1.50 : 0.0
+    bullAccelScore += bullOppResponseWeak ? 1.00 : 0.0
+    bullAccelScore += ltfDelta > 1.5 ? 1.00 : 0.0
+    bullAccelScore += bullCascadeWeak ? 1.00 : 0.0
+    bullAccelScore += bullCascadeStrong ? 1.50 : 0.0
+    bullAccelScore += emaFast > emaSlow and close > emaFast ? 0.75 : 0.0
+    bullAccelScore += bearWarning ? 0.75 : 0.0
+    bullAccelScore += closeUpper60 ? 0.50 : 0.0
+
+float bearAccelScore = 0.0
+if bearAccelContext
+    bearAccelScore += bearContinuationRaw ? 2.0 : 0.0
+    bearAccelScore += bearMicroBreak ? 1.25 : 0.0
+    bearAccelScore += bearAccelStair ? 1.50 : 0.0
+    bearAccelScore += bearAccelReject ? 1.50 : 0.0
+    bearAccelScore += bearOppResponseWeak ? 1.00 : 0.0
+    bearAccelScore += ltfDelta < -1.5 ? 1.00 : 0.0
+    bearAccelScore += bearCascadeWeak ? 1.00 : 0.0
+    bearAccelScore += bearCascadeStrong ? 1.50 : 0.0
+    bearAccelScore += emaFast < emaSlow and close < emaFast ? 0.75 : 0.0
+    bearAccelScore += bullWarning ? 0.75 : 0.0
+    bearAccelScore += closeLower40 ? 0.50 : 0.0
+
+bool bullAccelWeak = bullAccelProcessBase and bullAccelScore >= 4.0
+bool bearAccelWeak = bearAccelProcessBase and bearAccelScore >= 4.0
+
+bool bullAccelStrong = bullAccelProcessBase and bullAccelScore >= 6.0 and (bullContinuationRaw or bullCascadeStrong or bullAccelStair)
+bool bearAccelStrong = bearAccelProcessBase and bearAccelScore >= 6.0 and (bearContinuationRaw or bearCascadeStrong or bearAccelStair)
+
+if bullAccelStrong and bearAccelStrong
+    if bullAccelScore > bearAccelScore + 0.5
+        bearAccelStrong := false
+        bearAccelWeak := false
+    else if bearAccelScore > bullAccelScore + 0.5
+        bullAccelStrong := false
+        bullAccelWeak := false
+    else
+        bullAccelStrong := false
+        bearAccelStrong := false
+        bullAccelWeak := false
+        bearAccelWeak := false
+
+if not bullAccelStrong and not bearAccelStrong and bullAccelWeak and bearAccelWeak
+    if bullAccelScore > bearAccelScore + 0.5
+        bearAccelWeak := false
+    else if bearAccelScore > bullAccelScore + 0.5
+        bullAccelWeak := false
+    else
+        bullAccelWeak := false
+        bearAccelWeak := false
+
+float bullAccelBoost = bullAccelStrong ? 4.0 : bullAccelWeak ? 1.5 : 0.0
+float bearAccelBoost = bearAccelStrong ? 4.0 : bearAccelWeak ? 1.5 : 0.0
+
+float bullAccelPenalty = bearAccelStrong ? -3.0 : bearAccelWeak ? -1.25 : 0.0
+float bearAccelPenalty = bullAccelStrong ? -3.0 : bullAccelWeak ? -1.25 : 0.0
+
+
+// =====================================================
+// END OF IMPULSE / EXHAUSTION MODULE
+// =====================================================
+bool endUpContext = bullLeadBase or bullAccelWeak or bullAccelStrong or bullCascadeWeak or bullCascadeStrong or bullContinuationRaw or recentBullSignal
+bool endDownContext = bearLeadBase or bearAccelWeak or bearAccelStrong or bearCascadeWeak or bearCascadeStrong or bearContinuationRaw or recentBearSignal
+
+bool effortNoResultUp = (effortVol or climaxVol) and high >= high[1] and (closePos < 0.60 or close <= high[1])
+bool effortNoResultDown = (effortVol or climaxVol) and low <= low[1] and (closePos > 0.40 or close >= low[1])
+
+bool weakUpClose = close > open and closePos < 0.62 and not closeNearHigh
+bool weakDownClose = close < open and closePos > 0.38 and not closeNearLow
+
+bool noAcceptanceUp = bearNoAcceptUpper or sweepHigh or (high >= highestPrev3 and close < high[1])
+bool noAcceptanceDown = bullNoAcceptLower or sweepLow or (low <= lowestPrev3 and close > low[1])
+
+bool repeatedTopFail = high >= highestPrev3 and close <= close[1] and closePos < 0.60
+bool repeatedBottomFail = low <= lowestPrev3 and close >= close[1] and closePos > 0.40
+
+bool followThroughLostUp = (bullContinuationRaw[1] or bullAccelStrong[1] or bullCascadeStrong[1]) and close < close[1] and close < emaFast
+bool followThroughLostDown = (bearContinuationRaw[1] or bearAccelStrong[1] or bearCascadeStrong[1]) and close > close[1] and close > emaFast
+
+bool oppositeQualityRisingUp = bearReactionRaw or bearContinuationRaw or bearMicroBreak or bearAccelWeak or bearCascadeWeak
+bool oppositeQualityRisingDown = bullReactionRaw or bullContinuationRaw or bullMicroBreak or bullAccelWeak or bullCascadeWeak
+
+bool endUpProcessBase = endUpContext and (effortNoResultUp or noAcceptanceUp or repeatedTopFail or followThroughLostUp)
+bool endDownProcessBase = endDownContext and (effortNoResultDown or noAcceptanceDown or repeatedBottomFail or followThroughLostDown)
+
+float endUpScore = 0.0
+if endUpContext
+    endUpScore += effortNoResultUp ? 1.75 : 0.0
+    endUpScore += weakUpClose ? 1.00 : 0.0
+    endUpScore += noAcceptanceUp ? 1.50 : 0.0
+    endUpScore += repeatedTopFail ? 1.25 : 0.0
+    endUpScore += followThroughLostUp ? 1.50 : 0.0
+    endUpScore += oppositeQualityRisingUp ? 1.75 : 0.0
+    endUpScore += ltfDelta < -1.0 ? 0.75 : 0.0
+    endUpScore += sweepHigh ? 0.75 : 0.0
+    endUpScore += bearWarning ? 0.75 : 0.0
+    endUpScore += bullAccelStrong[1] ? 0.50 : 0.0
+    endUpScore += bullCascadeStrong[1] ? 0.50 : 0.0
+
+float endDownScore = 0.0
+if endDownContext
+    endDownScore += effortNoResultDown ? 1.75 : 0.0
+    endDownScore += weakDownClose ? 1.00 : 0.0
+    endDownScore += noAcceptanceDown ? 1.50 : 0.0
+    endDownScore += repeatedBottomFail ? 1.25 : 0.0
+    endDownScore += followThroughLostDown ? 1.50 : 0.0
+    endDownScore += oppositeQualityRisingDown ? 1.75 : 0.0
+    endDownScore += ltfDelta > 1.0 ? 0.75 : 0.0
+    endDownScore += sweepLow ? 0.75 : 0.0
+    endDownScore += bullWarning ? 0.75 : 0.0
+    endDownScore += bearAccelStrong[1] ? 0.50 : 0.0
+    endDownScore += bearCascadeStrong[1] ? 0.50 : 0.0
+
+bool endUpWeak = endUpProcessBase and endUpScore >= 4.0
+bool endDownWeak = endDownProcessBase and endDownScore >= 4.0
+
+bool endUpStrong = endUpProcessBase and endUpScore >= 6.0 and (oppositeQualityRisingUp or followThroughLostUp or noAcceptanceUp)
+bool endDownStrong = endDownProcessBase and endDownScore >= 6.0 and (oppositeQualityRisingDown or followThroughLostDown or noAcceptanceDown)
+
+if endUpStrong and endDownStrong
+    if endUpScore > endDownScore + 0.5
+        endDownStrong := false
+        endDownWeak := false
+    else if endDownScore > endUpScore + 0.5
+        endUpStrong := false
+        endUpWeak := false
+    else
+        endUpStrong := false
+        endDownStrong := false
+        endUpWeak := false
+        endDownWeak := false
+
+if not endUpStrong and not endDownStrong and endUpWeak and endDownWeak
+    if endUpScore > endDownScore + 0.5
+        endDownWeak := false
+    else if endDownScore > endUpScore + 0.5
+        endUpWeak := false
+    else
+        endUpWeak := false
+        endDownWeak := false
+
+float bullEndBoost = endDownStrong ? 3.25 : endDownWeak ? 1.25 : 0.0
+float bearEndBoost = endUpStrong ? 3.25 : endUpWeak ? 1.25 : 0.0
+
+float bullEndPenalty = endUpStrong ? -3.0 : endUpWeak ? -1.25 : 0.0
+float bearEndPenalty = endDownStrong ? -3.0 : endDownWeak ? -1.25 : 0.0
+
+
+
+// =====================================================
+// ETAP 2: QUALITY LAYER (SOFT SCORING / METADATA)
+// =====================================================
+bool bullAcceptedEvent = bullAcceptedNow > 0
+bool bearAcceptedEvent = bearAcceptedNow > 0
+
+int bullSignalSince = nz(ta.barssince(bullSignalRaw), 1000)
+int bearSignalSince = nz(ta.barssince(bearSignalRaw), 1000)
+int bullSweepSince = nz(ta.barssince(sweepLow), 1000)
+int bearSweepSince = nz(ta.barssince(sweepHigh), 1000)
+int bullRunOnLiquiditySince = nz(ta.barssince(bullRunOnLiquidity), 1000)
+int bearRunOnLiquiditySince = nz(ta.barssince(bearRunOnLiquidity), 1000)
+int bullSweepOfLiquiditySince = nz(ta.barssince(bullSweepOfLiquidity), 1000)
+int bearSweepOfLiquiditySince = nz(ta.barssince(bearSweepOfLiquidity), 1000)
+int bullReclaimAfterSweepSince = nz(ta.barssince(bullReclaimAfterSweep), 1000)
+int bearReclaimAfterSweepSince = nz(ta.barssince(bearReclaimAfterSweep), 1000)
+int bullAbsorptionAfterSweepSince = nz(ta.barssince(bullAbsorptionAfterSweep), 1000)
+int bearAbsorptionAfterSweepSince = nz(ta.barssince(bearAbsorptionAfterSweep), 1000)
+int bullConfirmSince = nz(ta.barssince(bullConfirmRaw), 1000)
+int bearConfirmSince = nz(ta.barssince(bearConfirmRaw), 1000)
+int bullFailureSince = nz(ta.barssince(bullFailureRaw), 1000)
+int bearFailureSince = nz(ta.barssince(bearFailureRaw), 1000)
+int bullAcceptedSince = nz(ta.barssince(bullAcceptedEvent), 1000)
+int bearAcceptedSince = nz(ta.barssince(bearAcceptedEvent), 1000)
+int bullCascadeStrongSince = nz(ta.barssince(bullCascadeStrong), 1000)
+int bearCascadeStrongSince = nz(ta.barssince(bearCascadeStrong), 1000)
+int bullAccelStrongSince = nz(ta.barssince(bullAccelStrong), 1000)
+int bearAccelStrongSince = nz(ta.barssince(bearAccelStrong), 1000)
+int endUpStrongSince = nz(ta.barssince(endUpStrong), 1000)
+int endDownStrongSince = nz(ta.barssince(endDownStrong), 1000)
+
+bool bullSweepRecent = bullSweepSince <= 2
+bool bearSweepRecent = bearSweepSince <= 2
+
+float bullSweepPenAtr = bullSweepRecent and not na(lastSwingLow) ? math.max(0.0, (lastSwingLow - low) / math.max(atr, syminfo.mintick)) : 0.0
+float bearSweepPenAtr = bearSweepRecent and not na(lastSwingHigh) ? math.max(0.0, (high - lastSwingHigh) / math.max(atr, syminfo.mintick)) : 0.0
+float bullSweepRejectPct = rangeNow > 0 ? (close - low) / rangeNow : 0.5
+float bearSweepRejectPct = rangeNow > 0 ? (high - close) / rangeNow : 0.5
+
+int bullPoolAge = selBullActive and not na(selBullBar) ? bar_index - selBullBar : 999
+int bearPoolAge = selBearActive and not na(selBearBar) ? bar_index - selBearBar : 999
+float bullPoolDistAtr = selBullActive ? math.abs(close - zoneMid(selBullTop, selBullBot)) / math.max(atr, syminfo.mintick) : 99.0
+float bearPoolDistAtr = selBearActive ? math.abs(close - zoneMid(selBearTop, selBearBot)) / math.max(atr, syminfo.mintick) : 99.0
+
+float bullTriggerQuality = 0.0
+if bullTriggerActive or recentBullSignal
+    bullTriggerQuality += bullReactionTriggerScore * 2.1
+    bullTriggerQuality += bullContinuationRaw ? 9.0 : 0.0
+    bullTriggerQuality += bullConfirmRaw ? 11.0 : bullMicroBreak ? 6.0 : 0.0
+    bullTriggerQuality += closeUpper60 ? 6.0 : 0.0
+    bullTriggerQuality += closeNearHigh ? 6.0 : 0.0
+    bullTriggerQuality += climaxVol ? 8.0 : effortVol ? 5.0 : quietVol ? 2.0 : 0.0
+    bullTriggerQuality += (selBullNear or sweepLow) ? 8.0 : selBullActive ? 4.0 : 0.0
+    bullTriggerQuality += recentBullSignal ? 5.0 : 0.0
+    bullTriggerQuality += bull2BR ? 4.0 : 0.0
+    bullTriggerQuality += bullEffortResult ? 4.0 : 0.0
+bullTriggerQuality := clamp100(bullTriggerQuality)
+
+float bearTriggerQuality = 0.0
+if bearTriggerActive or recentBearSignal
+    bearTriggerQuality += bearReactionTriggerScore * 2.1
+    bearTriggerQuality += bearContinuationRaw ? 9.0 : 0.0
+    bearTriggerQuality += bearConfirmRaw ? 11.0 : bearMicroBreak ? 6.0 : 0.0
+    bearTriggerQuality += closeLower40 ? 6.0 : 0.0
+    bearTriggerQuality += closeNearLow ? 6.0 : 0.0
+    bearTriggerQuality += climaxVol ? 8.0 : effortVol ? 5.0 : quietVol ? 2.0 : 0.0
+    bearTriggerQuality += (selBearNear or sweepHigh) ? 8.0 : selBearActive ? 4.0 : 0.0
+    bearTriggerQuality += recentBearSignal ? 5.0 : 0.0
+    bearTriggerQuality += bear2BR ? 4.0 : 0.0
+    bearTriggerQuality += bearEffortResult ? 4.0 : 0.0
+bearTriggerQuality := clamp100(bearTriggerQuality)
+
+float bullSweepQuality = 0.0
+if bullSweepRecent
+    bullSweepQuality += 28.0
+    bullSweepQuality += math.min(bullSweepPenAtr * 18.0, 18.0)
+    bullSweepQuality += bullSweepRejectPct >= 0.70 ? 18.0 : bullSweepRejectPct >= 0.55 ? 10.0 : 4.0
+    bullSweepQuality += close > nz(lastSwingLow, close) ? 8.0 : 0.0
+    bullSweepQuality += (effortVol or climaxVol) ? 8.0 : quietVol ? 4.0 : 0.0
+    bullSweepQuality += selBullNear ? 8.0 : 0.0
+    bullSweepQuality += bullMicroBreak ? 6.0 : 0.0
+bullSweepQuality := clamp100(bullSweepQuality)
+
+float bearSweepQuality = 0.0
+if bearSweepRecent
+    bearSweepQuality += 28.0
+    bearSweepQuality += math.min(bearSweepPenAtr * 18.0, 18.0)
+    bearSweepQuality += bearSweepRejectPct >= 0.70 ? 18.0 : bearSweepRejectPct >= 0.55 ? 10.0 : 4.0
+    bearSweepQuality += close < nz(lastSwingHigh, close) ? 8.0 : 0.0
+    bearSweepQuality += (effortVol or climaxVol) ? 8.0 : quietVol ? 4.0 : 0.0
+    bearSweepQuality += selBearNear ? 8.0 : 0.0
+    bearSweepQuality += bearMicroBreak ? 6.0 : 0.0
+bearSweepQuality := clamp100(bearSweepQuality)
+
+float bullPoolQuality = 0.0
+if selBullActive
+    bullPoolQuality += math.min(nz(selBullStrength, 0) * 0.60, 52.0)
+    bullPoolQuality += selBullNear ? 14.0 : bullPoolDistAtr <= 1.0 ? 8.0 : bullPoolDistAtr <= 1.8 ? 3.0 : 0.0
+    bullPoolQuality += selBullFresh ? 14.0 : selBullTouches == 1 ? 9.0 : selBullTouches == 2 ? 5.0 : 1.0
+    bullPoolQuality += bullPoolAge <= 3 ? 10.0 : bullPoolAge <= 6 ? 6.0 : bullPoolAge <= zoneLifeBars ? 2.0 : 0.0
+    bullPoolQuality += sweepLow ? 4.0 : 0.0
+    bullPoolQuality -= bullFailureRaw ? 18.0 : 0.0
+else if sweepLow
+    bullPoolQuality := 28.0
+bullPoolQuality := clamp100(bullPoolQuality)
+
+float bearPoolQuality = 0.0
+if selBearActive
+    bearPoolQuality += math.min(nz(selBearStrength, 0) * 0.60, 52.0)
+    bearPoolQuality += selBearNear ? 14.0 : bearPoolDistAtr <= 1.0 ? 8.0 : bearPoolDistAtr <= 1.8 ? 3.0 : 0.0
+    bearPoolQuality += selBearFresh ? 14.0 : selBearTouches == 1 ? 9.0 : selBearTouches == 2 ? 5.0 : 1.0
+    bearPoolQuality += bearPoolAge <= 3 ? 10.0 : bearPoolAge <= 6 ? 6.0 : bearPoolAge <= zoneLifeBars ? 2.0 : 0.0
+    bearPoolQuality += sweepHigh ? 4.0 : 0.0
+    bearPoolQuality -= bearFailureRaw ? 18.0 : 0.0
+else if sweepHigh
+    bearPoolQuality := 28.0
+bearPoolQuality := clamp100(bearPoolQuality)
+
+float backgroundStrengthBull = 0.0
+backgroundStrengthBull += recencyPoints(bullConfirmSince, 6, 20.0)
+backgroundStrengthBull += recencyPoints(bullSignalSince, 5, 8.0)
+backgroundStrengthBull += recencyPoints(bullAcceptedSince, 10, 12.0)
+backgroundStrengthBull += recencyPoints(bullCascadeStrongSince, 8, 10.0)
+backgroundStrengthBull += recencyPoints(bullAccelStrongSince, 6, 10.0)
+backgroundStrengthBull += recencyPoints(endDownStrongSince, 8, 8.0)
+backgroundStrengthBull += recencyPoints(bullSweepSince, 2, 6.0)
+backgroundStrengthBull := clamp100(backgroundStrengthBull)
+
+float backgroundStrengthBear = 0.0
+backgroundStrengthBear += recencyPoints(bearConfirmSince, 6, 20.0)
+backgroundStrengthBear += recencyPoints(bearSignalSince, 5, 8.0)
+backgroundStrengthBear += recencyPoints(bearAcceptedSince, 10, 12.0)
+backgroundStrengthBear += recencyPoints(bearCascadeStrongSince, 8, 10.0)
+backgroundStrengthBear += recencyPoints(bearAccelStrongSince, 6, 10.0)
+backgroundStrengthBear += recencyPoints(endUpStrongSince, 8, 8.0)
+backgroundStrengthBear += recencyPoints(bearSweepSince, 2, 6.0)
+backgroundStrengthBear := clamp100(backgroundStrengthBear)
+
+float backgroundWeaknessBull = 0.0
+backgroundWeaknessBull += recencyPoints(bearConfirmSince, 6, 18.0)
+backgroundWeaknessBull += recencyPoints(bearAcceptedSince, 10, 10.0)
+backgroundWeaknessBull += recencyPoints(bearCascadeStrongSince, 8, 10.0)
+backgroundWeaknessBull += recencyPoints(bearAccelStrongSince, 6, 10.0)
+backgroundWeaknessBull += recencyPoints(endUpStrongSince, 8, 10.0)
+backgroundWeaknessBull += recencyPoints(bearSweepSince, 2, 6.0)
+backgroundWeaknessBull += recencyPoints(bullFailureSince, 8, 18.0)
+backgroundWeaknessBull := clamp100(backgroundWeaknessBull)
+
+float backgroundWeaknessBear = 0.0
+backgroundWeaknessBear += recencyPoints(bullConfirmSince, 6, 18.0)
+backgroundWeaknessBear += recencyPoints(bullAcceptedSince, 10, 10.0)
+backgroundWeaknessBear += recencyPoints(bullCascadeStrongSince, 8, 10.0)
+backgroundWeaknessBear += recencyPoints(bullAccelStrongSince, 6, 10.0)
+backgroundWeaknessBear += recencyPoints(endDownStrongSince, 8, 10.0)
+backgroundWeaknessBear += recencyPoints(bullSweepSince, 2, 6.0)
+backgroundWeaknessBear += recencyPoints(bearFailureSince, 8, 18.0)
+backgroundWeaknessBear := clamp100(backgroundWeaknessBear)
+
+float bullBackgroundContext = clamp100(50.0 + (backgroundStrengthBull - backgroundWeaknessBull) * 0.42 + (backgroundWeaknessBear - backgroundStrengthBear) * 0.18)
+float bearBackgroundContext = clamp100(50.0 + (backgroundStrengthBear - backgroundWeaknessBear) * 0.42 + (backgroundWeaknessBull - backgroundStrengthBull) * 0.18)
+
+bool bullBackgroundSupport = backgroundStrengthBull >= bgSupportStrengthMin or backgroundWeaknessBear >= bgSupportOppWeakMin or bullBackgroundContext >= bgSupportContextMin
+bool bearBackgroundSupport = backgroundStrengthBear >= bgSupportStrengthMin or backgroundWeaknessBull >= bgSupportOppWeakMin or bearBackgroundContext >= bgSupportContextMin
+bool bullBackgroundConflict = backgroundWeaknessBull >= bgConflictWeakMin or backgroundStrengthBear >= bgConflictOppStrMin or bullBackgroundContext <= bgConflictContextMax
+bool bearBackgroundConflict = backgroundWeaknessBear >= bgConflictWeakMin or backgroundStrengthBull >= bgConflictOppStrMin or bearBackgroundContext <= bgConflictContextMax
+
+float bullBackgroundMemory = bullBackgroundContext
+float bearBackgroundMemory = bearBackgroundContext
+var float bullBackgroundMemoryState = 50.0
+var float bearBackgroundMemoryState = 50.0
+
+int rollingBgBars = clipLen(bgRollingWindowBars, 20, 50)
+float bullDirectionalBars = math.sum(close > close[1] ? 1.0 : 0.0, rollingBgBars)
+float bearDirectionalBars = math.sum(close < close[1] ? 1.0 : 0.0, rollingBgBars)
+bool dirFlipNow = (close > close[1] and close[1] < close[2]) or (close < close[1] and close[1] > close[2])
+float directionFlipBars = math.sum(dirFlipNow ? 1.0 : 0.0, rollingBgBars)
+float directionalImbalance = math.abs(bullDirectionalBars - bearDirectionalBars) / rollingBgBars
+float netMoveAtrRolling = math.abs(close - close[rollingBgBars]) / math.max(atr, syminfo.mintick)
+
+bool regimeTrend = directionalImbalance >= bgTrendImbalanceMin and directionFlipBars <= rollingBgBars * 0.42 and netMoveAtrRolling >= 1.8
+bool regimeChaos = directionFlipBars >= rollingBgBars * bgChaosFlipPctMin and netMoveAtrRolling <= 1.1 and directionalImbalance <= 0.12
+bool regimeRotation = not regimeTrend and not regimeChaos
+string marketRegimeState = regimeTrend ? "TREND" : regimeChaos ? "CHAOS" : "ROTATION"
+
+bool bullApproachImpulsive = bullContinuationRaw and bullDirectionalBars > bearDirectionalBars + rollingBgBars * 0.10
+bool bearApproachImpulsive = bearContinuationRaw and bearDirectionalBars > bullDirectionalBars + rollingBgBars * 0.10
+bool bullApproachHealthy = (selBullNear or bullLocation >= 8 or sweepLow) and bullApproachImpulsive and not endUpStrong and not bullWarning and not regimeChaos
+bool bearApproachHealthy = (selBearNear or bearLocation >= 8 or sweepHigh) and bearApproachImpulsive and not endDownStrong and not bearWarning and not regimeChaos
+bool bullApproachExhausted = (endUpStrong or (climaxVol and bullDirectionalBars > bearDirectionalBars and close < close[1])) and (selBullNear or bullLocation >= 8)
+bool bearApproachExhausted = (endDownStrong or (climaxVol and bearDirectionalBars > bullDirectionalBars and close > close[1])) and (selBearNear or bearLocation >= 8)
+bool bullApproachChoppy = regimeRotation or regimeChaos
+bool bearApproachChoppy = regimeRotation or regimeChaos
+
+bool bullImpulseMaintenance = (bullContinuationRaw or bullAccelWeak or bullCascadeWeak) and bullDirectionalBars >= bearDirectionalBars and not followThroughLostUp and not endUpStrong
+bool bearImpulseMaintenance = (bearContinuationRaw or bearAccelWeak or bearCascadeWeak) and bearDirectionalBars >= bullDirectionalBars and not followThroughLostDown and not endDownStrong
+bool bullImpulseWeakening = followThroughLostUp or (bullDirectionalBars < bearDirectionalBars and (bearReactionRaw or bearContinuationRaw)) or bullWarning
+bool bearImpulseWeakening = followThroughLostDown or (bearDirectionalBars < bullDirectionalBars and (bullReactionRaw or bullContinuationRaw)) or bearWarning
+
+bool bullCorrectionHealthy = bullImpulseMaintenance and (not bearAcceptedEvent or bearDirectionalBars <= bullDirectionalBars * 0.92)
+bool bearCorrectionHealthy = bearImpulseMaintenance and (not bullAcceptedEvent or bullDirectionalBars <= bearDirectionalBars * 0.92)
+bool bullCorrectionDestructive = bullImpulseWeakening and (bearAcceptedEvent or bearContinuationRaw or bearAccelWeak)
+bool bearCorrectionDestructive = bearImpulseWeakening and (bullAcceptedEvent or bullContinuationRaw or bullAccelWeak)
+
+bool bullAbsorptionBackground = bullAbsorbConfirmed or (bullAbsorb and effortVol and close > open and bearAcceptedNow == 0)
+bool bearAbsorptionBackground = bearAbsorbConfirmed or (bearAbsorb and effortVol and close < open and bullAcceptedNow == 0)
+bool bullNoAcceptanceContext = bullNoAcceptLower or (sweepLow and bearAcceptedNow == 0 and close > open)
+bool bearNoAcceptanceContext = bearNoAcceptUpper or (sweepHigh and bullAcceptedNow == 0 and close < open)
+bool bullAccumulationBackground = (bullStopping or bullShakeout or bullTest or bullNoSupply or bullAbsorb) and bullDirectionalBars >= bearDirectionalBars and bearAcceptedNow == 0
+bool bearDistributionBackground = (bearUpthrust or bearNoDemand or bearTest or bearAbsorb) and bearDirectionalBars >= bullDirectionalBars and bullAcceptedNow == 0
+
+float bullRollingBackgroundSupport = 0.0
+bullRollingBackgroundSupport += regimeTrend and bullDirectionalBars > bearDirectionalBars ? 12.0 : regimeRotation ? 3.0 : 0.0
+bullRollingBackgroundSupport += bullApproachHealthy ? 10.0 : bullApproachChoppy ? -4.0 : 0.0
+bullRollingBackgroundSupport += bullImpulseMaintenance ? 9.0 : bullImpulseWeakening ? -8.0 : 0.0
+bullRollingBackgroundSupport += bullCorrectionHealthy ? 8.0 : bullCorrectionDestructive ? -10.0 : 0.0
+bullRollingBackgroundSupport += bullAbsorptionBackground ? 6.0 : 0.0
+bullRollingBackgroundSupport += bullNoAcceptanceContext ? 6.0 : 0.0
+bullRollingBackgroundSupport += bullAccumulationBackground ? 5.0 : 0.0
+bullRollingBackgroundSupport += bullManipulationSupport ? 6.0 : bullManipulationRisk ? -7.0 : 0.0
+bullRollingBackgroundSupport += bullApproachExhausted ? -10.0 : 0.0
+
+float bearRollingBackgroundSupport = 0.0
+bearRollingBackgroundSupport += regimeTrend and bearDirectionalBars > bullDirectionalBars ? 12.0 : regimeRotation ? 3.0 : 0.0
+bearRollingBackgroundSupport += bearApproachHealthy ? 10.0 : bearApproachChoppy ? -4.0 : 0.0
+bearRollingBackgroundSupport += bearImpulseMaintenance ? 9.0 : bearImpulseWeakening ? -8.0 : 0.0
+bearRollingBackgroundSupport += bearCorrectionHealthy ? 8.0 : bearCorrectionDestructive ? -10.0 : 0.0
+bearRollingBackgroundSupport += bearAbsorptionBackground ? 6.0 : 0.0
+bearRollingBackgroundSupport += bearNoAcceptanceContext ? 6.0 : 0.0
+bearRollingBackgroundSupport += bearDistributionBackground ? 5.0 : 0.0
+bearRollingBackgroundSupport += bearManipulationSupport ? 6.0 : bearManipulationRisk ? -7.0 : 0.0
+bearRollingBackgroundSupport += bearApproachExhausted ? -10.0 : 0.0
+
+float bullRollingBackgroundContext = clamp100(50.0 + bullRollingBackgroundSupport)
+float bearRollingBackgroundContext = clamp100(50.0 + bearRollingBackgroundSupport)
+
+float bullBackgroundMemoryRaw = clamp100(bullBackgroundContext * 0.72 + bullRollingBackgroundContext * 0.28)
+float bearBackgroundMemoryRaw = clamp100(bearBackgroundContext * 0.72 + bearRollingBackgroundContext * 0.28)
+bullBackgroundMemoryState := na(bullBackgroundMemoryState[1]) ? bullBackgroundMemoryRaw : clamp100(bullBackgroundMemoryState[1] * 0.72 + bullBackgroundMemoryRaw * 0.28)
+bearBackgroundMemoryState := na(bearBackgroundMemoryState[1]) ? bearBackgroundMemoryRaw : clamp100(bearBackgroundMemoryState[1] * 0.72 + bearBackgroundMemoryRaw * 0.28)
+bullBackgroundMemory := bullBackgroundMemoryState
+bearBackgroundMemory := bearBackgroundMemoryState
+
+bool bullRollingBackgroundConflict = bullRollingBackgroundSupport <= -8.0
+bool bearRollingBackgroundConflict = bearRollingBackgroundSupport <= -8.0
+
+string bullBackgroundMemoryText = bullCorrectionDestructive ? "Bull context: destructive pullback risk" :
+     bullApproachExhausted ? "Bull context: move looks exhausted" :
+     backgroundWeaknessBull >= 65 ? "Bull bg under pressure" :
+     backgroundStrengthBull >= 65 ? "Bull strength in background" :
+     backgroundWeaknessBear >= 60 ? "Bear weakness in background" :
+     bullBackgroundSupport ? "Bull supportive background" :
+     bullBackgroundConflict ? "Bull trigger vs hostile bg" :
+     "Neutral background"
+
+string bearBackgroundMemoryText = bearCorrectionDestructive ? "Bear context: destructive pullback risk" :
+     bearApproachExhausted ? "Bear context: move looks exhausted" :
+     backgroundWeaknessBear >= 65 ? "Bear bg under pressure" :
+     backgroundStrengthBear >= 65 ? "Bear strength in background" :
+     backgroundWeaknessBull >= 60 ? "Bull weakness in background" :
+     bearBackgroundSupport ? "Bear supportive background" :
+     bearBackgroundConflict ? "Bear trigger vs hostile bg" :
+     "Neutral background"
+
+string bullTriggerQualityText = qualityBandText(bullTriggerQuality) + " " + strPct(bullTriggerQuality)
+string bearTriggerQualityText = qualityBandText(bearTriggerQuality) + " " + strPct(bearTriggerQuality)
+string bullSweepQualityText = qualityBandText(bullSweepQuality) + " " + strPct(bullSweepQuality)
+string bearSweepQualityText = qualityBandText(bearSweepQuality) + " " + strPct(bearSweepQuality)
+string bullPoolQualityText = qualityBandText(bullPoolQuality) + " " + strPct(bullPoolQuality)
+string bearPoolQualityText = qualityBandText(bearPoolQuality) + " " + strPct(bearPoolQuality)
+string bullMemoryQualityText = qualityBandText(bullBackgroundMemory) + " " + strPct(bullBackgroundMemory)
+string bearMemoryQualityText = qualityBandText(bearBackgroundMemory) + " " + strPct(bearBackgroundMemory)
+
+float bullTriggerQualityModifier = bullTriggerActive or recentBullSignal ? qualityToModifier(bullTriggerQuality, 55.0, 12.0, 3.0) : 0.0
+float bearTriggerQualityModifier = bearTriggerActive or recentBearSignal ? qualityToModifier(bearTriggerQuality, 55.0, 12.0, 3.0) : 0.0
+float bullSweepQualityModifier = bullSweepRecent ? qualityToModifier(bullSweepQuality, 50.0, 14.0, 2.5) : 0.0
+float bearSweepQualityModifier = bearSweepRecent ? qualityToModifier(bearSweepQuality, 50.0, 14.0, 2.5) : 0.0
+float bullPoolQualityModifier = selBullActive or bullSweepRecent ? qualityToModifier(bullPoolQuality, 50.0, 16.0, 2.0) : 0.0
+float bearPoolQualityModifier = selBearActive or bearSweepRecent ? qualityToModifier(bearPoolQuality, 50.0, 16.0, 2.0) : 0.0
+float bullBackgroundMemoryModifier = qualityToModifier(bullBackgroundMemory, 50.0, 14.0, 2.5)
+float bearBackgroundMemoryModifier = qualityToModifier(bearBackgroundMemory, 50.0, 14.0, 2.5)
+float bullBackgroundConflictModifier = bullTriggerPotentialRaw and bullBackgroundConflict ? -3.0 : bullTriggerPotentialRaw and bullBackgroundSupport ? 1.0 : 0.0
+float bearBackgroundConflictModifier = bearTriggerPotentialRaw and bearBackgroundConflict ? -3.0 : bearTriggerPotentialRaw and bearBackgroundSupport ? 1.0 : 0.0
+float bullRollingBackgroundModifier = qualityToModifier(bullRollingBackgroundContext, 50.0, 16.0, 2.0)
+float bearRollingBackgroundModifier = qualityToModifier(bearRollingBackgroundContext, 50.0, 16.0, 2.0)
+
+float bullQualityLayerModifier = bullTriggerQualityModifier + bullSweepQualityModifier + bullPoolQualityModifier + bullBackgroundMemoryModifier + bullBackgroundConflictModifier + bullRollingBackgroundModifier
+float bearQualityLayerModifier = bearTriggerQualityModifier + bearSweepQualityModifier + bearPoolQualityModifier + bearBackgroundMemoryModifier + bearBackgroundConflictModifier + bearRollingBackgroundModifier
+
+// =====================================================
+// MODIFIER LAYER: WEIGHTS / PENALTIES / RECLASSIFICATION
+// =====================================================
+float bullFailureModifier = bullFailureRaw ? -22.0 : 0.0
+float bearFailureModifier = bearFailureRaw ? -22.0 : 0.0
+
+float bullContextModifier = softBearBias > softBullBias and not bullReactionRaw ? -6.0 : 0.0
+float bearContextModifier = softBullBias > softBearBias and not bearReactionRaw ? -6.0 : 0.0
+
+float bullLtfModifier = ltfBullAdj
+float bearLtfModifier = ltfBearAdj
+
+float bullTransitionModifier = bullWeakPenalty + bullTakeoverBoost
+float bearTransitionModifier = bearWeakPenalty + bearTakeoverBoost
+
+float bullCascadeModifier = bullCascadeBoost + bullCascadePenalty
+float bearCascadeModifier = bearCascadeBoost + bearCascadePenalty
+
+float bullAccelerationModifier = bullAccelBoost + bullAccelPenalty
+float bearAccelerationModifier = bearAccelBoost + bearAccelPenalty
+
+float bullImpulseEndModifier = bullEndBoost + bullEndPenalty
+float bearImpulseEndModifier = bearEndBoost + bearEndPenalty
+
+float bullModifierCoreScore = bullFailureModifier + bullContextModifier + bullLtfModifier + bullTransitionModifier + bullCascadeModifier + bullAccelerationModifier + bullImpulseEndModifier + bullQualityLayerModifier
+float bearModifierCoreScore = bearFailureModifier + bearContextModifier + bearLtfModifier + bearTransitionModifier + bearCascadeModifier + bearAccelerationModifier + bearImpulseEndModifier + bearQualityLayerModifier
+
+// =====================================================
+// SCENARIO ADJUSTMENT — QUALITY PIPELINE
+// =====================================================
+float provisionalBullQuality = clamp100(baseBullQuality + bullModifierCoreScore)
+float provisionalBearQuality = clamp100(baseBearQuality + bearModifierCoreScore)
+bool bullScenarioLocationExec = selBullNear or sweepLow or bullLocation >= 10
+bool bearScenarioLocationExec = selBearNear or sweepHigh or bearLocation >= 10
+bool bullScenarioAdvisoryStrongAgainst = bearCascadeStrong or bearAccelStrong or endUpStrong
+bool bearScenarioAdvisoryStrongAgainst = bullCascadeStrong or bullAccelStrong or endDownStrong
+bool bullScenarioAdvisoryWeakAgainst = bearCascadeWeak or bearAccelWeak or endUpWeak
+bool bearScenarioAdvisoryWeakAgainst = bullCascadeWeak or bullAccelWeak or endDownWeak
+float bullOpposingStructLvl = selBearActive and zoneBottom(selBearTop, selBearBot) > close ? zoneBottom(selBearTop, selBearBot) : na
+float bearOpposingStructLvl = selBullActive and zoneTop(selBullTop, selBullBot) < close ? zoneTop(selBullTop, selBullBot) : na
+float bullRoomStructAtr = not na(bullOpposingStructLvl) ? (bullOpposingStructLvl - close) / math.max(atr, syminfo.mintick) : na
+float bearRoomStructAtr = not na(bearOpposingStructLvl) ? (close - bearOpposingStructLvl) / math.max(atr, syminfo.mintick) : na
+float bullRoomFibAtr = not na(bullFibProjection1272) ? (bullFibProjection1272 - close) / math.max(atr, syminfo.mintick) : na
+float bearRoomFibAtr = not na(bearFibProjection1272) ? (close - bearFibProjection1272) / math.max(atr, syminfo.mintick) : na
+
+float bullScenarioAdjustmentRaw = 0.0
+bullScenarioAdjustmentRaw += bullScenarioLocationExec ? 1.2 : -0.8
+bullScenarioAdjustmentRaw += bullConfirmRaw ? 1.1 : bullMicroBreak ? 0.4 : 0.0
+bullScenarioAdjustmentRaw += bullContinuationRaw ? 0.8 : 0.0
+bullScenarioAdjustmentRaw += bullAccelStrong or bullCascadeStrong ? 0.5 : bullAccelWeak or bullCascadeWeak ? 0.2 : 0.0
+bullScenarioAdjustmentRaw += (not na(bullRoomStructAtr) and bullRoomStructAtr >= 0.7) or (not na(bullRoomFibAtr) and bullRoomFibAtr >= 0.8) ? 0.4 : 0.0
+bullScenarioAdjustmentRaw -= bullFailureRaw ? 2.6 : 0.0
+bullScenarioAdjustmentRaw -= bullManipulationRisk ? 1.0 : 0.0
+bullScenarioAdjustmentRaw -= bullBackgroundConflict ? 0.9 : 0.0
+bullScenarioAdjustmentRaw -= bullScenarioAdvisoryStrongAgainst ? 0.9 : bullScenarioAdvisoryWeakAgainst ? 0.4 : 0.0
+
+float bearScenarioAdjustmentRaw = 0.0
+bearScenarioAdjustmentRaw += bearScenarioLocationExec ? 1.2 : -0.8
+bearScenarioAdjustmentRaw += bearConfirmRaw ? 1.1 : bearMicroBreak ? 0.4 : 0.0
+bearScenarioAdjustmentRaw += bearContinuationRaw ? 0.8 : 0.0
+bearScenarioAdjustmentRaw += bearAccelStrong or bearCascadeStrong ? 0.5 : bearAccelWeak or bearCascadeWeak ? 0.2 : 0.0
+bearScenarioAdjustmentRaw += (not na(bearRoomStructAtr) and bearRoomStructAtr >= 0.7) or (not na(bearRoomFibAtr) and bearRoomFibAtr >= 0.8) ? 0.4 : 0.0
+bearScenarioAdjustmentRaw -= bearFailureRaw ? 2.6 : 0.0
+bearScenarioAdjustmentRaw -= bearManipulationRisk ? 1.0 : 0.0
+bearScenarioAdjustmentRaw -= bearBackgroundConflict ? 0.9 : 0.0
+bearScenarioAdjustmentRaw -= bearScenarioAdvisoryStrongAgainst ? 0.9 : bearScenarioAdvisoryWeakAgainst ? 0.4 : 0.0
+
+float bullScenarioFailureRisk = clamp100((bullFailureRaw ? 45.0 : 0.0) + (bullManipulationRisk ? 18.0 : 0.0) + (bullBackgroundConflict ? 14.0 : 0.0) + (bullScenarioAdvisoryStrongAgainst ? 10.0 : bullScenarioAdvisoryWeakAgainst ? 5.0 : 0.0) + (ltfLongBlocked ? 10.0 : 0.0))
+float bearScenarioFailureRisk = clamp100((bearFailureRaw ? 45.0 : 0.0) + (bearManipulationRisk ? 18.0 : 0.0) + (bearBackgroundConflict ? 14.0 : 0.0) + (bearScenarioAdvisoryStrongAgainst ? 10.0 : bearScenarioAdvisoryWeakAgainst ? 5.0 : 0.0) + (ltfShortBlocked ? 10.0 : 0.0))
+
+float bullScenarioScore = clamp100(provisionalBullQuality + bullScenarioAdjustmentRaw * scenarioDirectionWeight)
+float bearScenarioScore = clamp100(provisionalBearQuality + bearScenarioAdjustmentRaw * scenarioDirectionWeight)
+
+float bullScenarioContribution = scenarioContribution(bullScenarioScore, bullFailureRaw, scenarioContributionCap)
+float bearScenarioContribution = scenarioContribution(bearScenarioScore, bearFailureRaw, scenarioContributionCap)
+
+// =====================================================
+// FINAL QUALITY
+// =====================================================
+float bullQualityBase = baseBullQuality
+float bearQualityBase = baseBearQuality
+float bullModifierTotal = bullModifierCoreScore + bullScenarioContribution
+float bearModifierTotal = bearModifierCoreScore + bearScenarioContribution
+float bullQualityRaw = bullQualityBase + bullModifierTotal
+float bearQualityRaw = bearQualityBase + bearModifierTotal
+
+float bullQuality = clamp100(bullQualityRaw)
+float bearQuality = clamp100(bearQualityRaw)
+
+float bullImpulse = 0.0
+bullImpulse += bullEffortResult ? 30 : 0
+bullImpulse += bull2BR ? 22 : 0
+bullImpulse += bullConfirmRaw ? 20 : 0
+bullImpulse += bullStopping ? 12 : 0
+bullImpulse += closeNearHigh and close > open ? 10 : 0
+bullImpulse += climaxVol ? 10 : effortVol ? 6 : 0
+bullImpulse += bullMicroBreak ? 12 : 0
+bullImpulse := clamp100(bullImpulse)
+
+float bearImpulse = 0.0
+bearImpulse += bearEffortResult ? 30 : 0
+bearImpulse += bear2BR ? 22 : 0
+bearImpulse += bearConfirmRaw ? 20 : 0
+bearImpulse += bearStopping ? 12 : 0
+bearImpulse += closeNearLow and close < open ? 10 : 0
+bearImpulse += climaxVol ? 10 : effortVol ? 6 : 0
+bearImpulse += bearMicroBreak ? 12 : 0
+bearImpulse := clamp100(bearImpulse)
+
+bool bullDominant = bullQuality > bearQuality + minSideGap
+bool bearDominant = bearQuality > bullQuality + minSideGap
+
+string regimeText = bullContext > bearContext ? "Bull" : bearContext > bullContext ? "Bear" : "Neutral"
+
+// =====================================================
+// WATCH / SETUP / ENTRY
+// =====================================================
+bool bullAdvisoryWeakAgainst = bearCascadeWeak or bearAccelWeak or endUpWeak
+bool bearAdvisoryWeakAgainst = bullCascadeWeak or bullAccelWeak or endDownWeak
+
+bool bullSetupAdvisoryHardBlock = (bearCascadeStrong and bearAccelStrong and bearQuality > bullQuality + 4) or (endUpStrong and bearContinuationRaw and bearQuality > bullQuality + 6)
+bool bearSetupAdvisoryHardBlock = (bullCascadeStrong and bullAccelStrong and bullQuality > bearQuality + 4) or (endDownStrong and bullContinuationRaw and bullQuality > bearQuality + 6)
+
+bool bullEntryAdvisoryHardBlock = (bearCascadeStrong and bearAccelStrong and bearQuality > bullQuality + 2) or (endUpStrong and bearQuality >= bullQuality)
+bool bearEntryAdvisoryHardBlock = (bullCascadeStrong and bullAccelStrong and bullQuality > bearQuality + 2) or (endDownStrong and bullQuality >= bearQuality)
+
+bool bullWatchAllowed = tfOk and not bullFailureRaw and not bullWarning and not bullSetupAdvisoryHardBlock
+bool bearWatchAllowed = tfOk and not bearFailureRaw and not bearWarning and not bearSetupAdvisoryHardBlock
+
+bool watchTrendLong = bullWatchAllowed and bullDominant and bullQuality >= watchQ and bullContext >= 14 and (bullContinuationRaw or bullCascadeStrong or bullAccelStrong) and bullLocation >= 8
+bool watchTrendShort = bearWatchAllowed and bearDominant and bearQuality >= watchQ and bearContext >= 14 and (bearContinuationRaw or bearCascadeStrong or bearAccelStrong) and bearLocation >= 8
+
+bool watchReactionLong = bullWatchAllowed and bullQuality >= watchQ and bullReactionRaw and bullLocation >= 10 and bullQuality > bearQuality + math.max(minSideGap - 2, 0) and (softBearBias > softBullBias or bullContext < 14)
+bool watchReactionShort = bearWatchAllowed and bearQuality >= watchQ and bearReactionRaw and bearLocation >= 10 and bearQuality > bullQuality + math.max(minSideGap - 2, 0) and (softBullBias > softBearBias or bearContext < 14)
+
+var bool bullSetupLive = false
+var bool bearSetupLive = false
+var int bullSetupBar = na
+var int bearSetupBar = na
+var float bullSetupRef = na
+var float bearSetupRef = na
+var string bullSetupType = ""
+var string bearSetupType = ""
+var string bullSetupReason = ""
+var string bearSetupReason = ""
+
+float setupTriggerMinLocal = setupTriggerMin
+float setupQPressure = math.max(20.0, setupQ - setupPressureQOffset)
+float setupIPressure = math.max(10.0, setupI - setupPressureIOffset)
+
+bool bullSetupOppositionHard = bullSetupAdvisoryHardBlock
+bool bearSetupOppositionHard = bearSetupAdvisoryHardBlock
+
+bool bullSetupEligibleBase = tfOk and not bullWarning and not bullFailureRaw and not bullSetupOppositionHard
+bool bearSetupEligibleBase = tfOk and not bearWarning and not bearFailureRaw and not bearSetupOppositionHard
+
+bool bullReactionSetup = bullSetupEligibleBase and (watchReactionLong or (bullReactionRaw and bullLocation >= 9 and bullQuality >= setupQ and bullImpulse >= setupI and bullTrigger >= setupTriggerMinLocal and bullQuality > bearQuality + math.max(minSideGap - 3, 0)))
+bool bearReactionSetup = bearSetupEligibleBase and (watchReactionShort or (bearReactionRaw and bearLocation >= 9 and bearQuality >= setupQ and bearImpulse >= setupI and bearTrigger >= setupTriggerMinLocal and bearQuality > bullQuality + math.max(minSideGap - 3, 0)))
+
+bool bullTrendSetup = bullSetupEligibleBase and (watchTrendLong or (bullDominant and bullContext >= 12 and bullQuality >= setupQ and bullImpulse >= setupI and bullTrigger >= setupTriggerMinLocal and (bullContinuationRaw or bullCascadeWeak or bullAccelWeak) and bullLocation >= 7))
+bool bearTrendSetup = bearSetupEligibleBase and (watchTrendShort or (bearDominant and bearContext >= 12 and bearQuality >= setupQ and bearImpulse >= setupI and bearTrigger >= setupTriggerMinLocal and (bearContinuationRaw or bearCascadeWeak or bearAccelWeak) and bearLocation >= 7))
+
+bool bullPressureFlow = bullContinuationRaw or recentBullSignal or bullCascadeWeak or bullAccelWeak or bullSegPct > bearSegPct + 10
+bool bearPressureFlow = bearContinuationRaw or recentBearSignal or bearCascadeWeak or bearAccelWeak or bearSegPct > bullSegPct + 10
+
+bool bullPressureSetup = bullSetupEligibleBase and bullDominant and bullPressureFlow and bullQuality >= setupQPressure and bullImpulse >= setupIPressure and bullTrigger >= 9 and (bullLocation >= 6 or bullContinuationRaw or bullCascadeWeak or bullAccelWeak or sweepLow)
+bool bearPressureSetup = bearSetupEligibleBase and bearDominant and bearPressureFlow and bearQuality >= setupQPressure and bearImpulse >= setupIPressure and bearTrigger >= 9 and (bearLocation >= 6 or bearContinuationRaw or bearCascadeWeak or bearAccelWeak or sweepHigh)
+
+bool bullSetupFromWatch = watchTrendLong or watchReactionLong
+bool bearSetupFromWatch = watchTrendShort or watchReactionShort
+bool bullSetupFromDirectStructure = (bullReactionSetup and not watchReactionLong) or (bullTrendSetup and not watchTrendLong) or bullPressureSetup
+bool bearSetupFromDirectStructure = (bearReactionSetup and not watchReactionShort) or (bearTrendSetup and not watchTrendShort) or bearPressureSetup
+
+bool bullSetupCandidate = bullReactionSetup or bullTrendSetup or bullPressureSetup
+bool bearSetupCandidate = bearReactionSetup or bearTrendSetup or bearPressureSetup
+
+string bullSetupTypeCandidate = setupTypeText(bullReactionSetup, bullPressureSetup, bullTrendSetup, "REACTION LONG", "PRESSURE LONG", "TREND LONG")
+string bearSetupTypeCandidate = setupTypeText(bearReactionSetup, bearPressureSetup, bearTrendSetup, "REACTION SHORT", "PRESSURE SHORT", "TREND SHORT")
+
+float bullSetupRank = setupRankScore(bullReactionSetup, bullPressureSetup, bullTrendSetup, bullQuality, bullImpulse)
+float bearSetupRank = setupRankScore(bearReactionSetup, bearPressureSetup, bearTrendSetup, bearQuality, bearImpulse)
+
+bool bullSetupWins = bullSetupCandidate and (not bearSetupCandidate or bullSetupRank > bearSetupRank + 0.05)
+bool bearSetupWins = bearSetupCandidate and (not bullSetupCandidate or bearSetupRank > bullSetupRank + 0.05)
+
+if barstate.isconfirmed and bullSetupWins and not bearSetupWins
+    bullSetupLive := true
+    bearSetupLive := false
+    bullSetupBar := bar_index
+    bullSetupRef := high
+    bullSetupType := bullSetupTypeCandidate
+    bullSetupReason := setupReasonPrefix(bullSetupFromDirectStructure, bullSetupFromWatch) + bullTriggerText
+
+if barstate.isconfirmed and bearSetupWins and not bullSetupWins
+    bearSetupLive := true
+    bullSetupLive := false
+    bearSetupBar := bar_index
+    bearSetupRef := low
+    bearSetupType := bearSetupTypeCandidate
+    bearSetupReason := setupReasonPrefix(bearSetupFromDirectStructure, bearSetupFromWatch) + bearTriggerText
+
+bool bullSetupTriggerNow = bullTriggerActive or (bullSetupLive and bullContinuationRaw)
+bool bearSetupTriggerNow = bearTriggerActive or (bearSetupLive and bearContinuationRaw)
+bool bullSetupLocationNow = selBullNear or sweepLow or (bullSetupLive and bullLocation >= 6)
+bool bearSetupLocationNow = selBearNear or sweepHigh or (bearSetupLive and bearLocation >= 6)
+bool bullSetupMicroNow = bullConfirmRaw or bullMicroBreak or (bullSetupLive and bullContinuationRaw and bullDominant)
+bool bearSetupMicroNow = bearConfirmRaw or bearMicroBreak or (bearSetupLive and bearContinuationRaw and bearDominant)
+int bullSetupSupportBarsSince = nz(ta.barssince(bullSetupTriggerNow or bullSetupLocationNow or bullSetupMicroNow), 1000)
+int bearSetupSupportBarsSince = nz(ta.barssince(bearSetupTriggerNow or bearSetupLocationNow or bearSetupMicroNow), 1000)
+bool bullSetupTerminalLost = setupTerminalLost(execTf, bullSetupLive, bullSetupBar, bullSetupSupportBarsSince, bullDominant)
+bool bearSetupTerminalLost = setupTerminalLost(execTf, bearSetupLive, bearSetupBar, bearSetupSupportBarsSince, bearDominant)
+int bullSetupMaxBars = setupMaxBars(execTf, bullSetupType, "REACTION LONG")
+int bearSetupMaxBars = setupMaxBars(execTf, bearSetupType, "REACTION SHORT")
+
+if bullSetupLive and (bar_index - bullSetupBar > bullSetupMaxBars or bullFailureRaw or bullSetupTerminalLost)
+    bullSetupLive := false
+if bearSetupLive and (bar_index - bearSetupBar > bearSetupMaxBars or bearFailureRaw or bearSetupTerminalLost)
+    bearSetupLive := false
+
+bool bullEntryEligibleBase = barstate.isconfirmed and bullSetupLive and bullDominant and not bullFailureRaw and not bullEntryAdvisoryHardBlock
+bool bearEntryEligibleBase = barstate.isconfirmed and bearSetupLive and bearDominant and not bearFailureRaw and not bearEntryAdvisoryHardBlock
+bool bullEntryThresholdPass = bullQuality >= entryQ and bullImpulse >= entryI
+bool bearEntryThresholdPass = bearQuality >= entryQ and bearImpulse >= entryI
+bool bullEntryBase = bullEntryEligibleBase and bullEntryThresholdPass
+bool bearEntryBase = bearEntryEligibleBase and bearEntryThresholdPass
+
+bool bullEntryReaction = bullSetupType == "REACTION LONG" and bullConfirmRaw and close > bullSetupRef
+bool bearEntryReaction = bearSetupType == "REACTION SHORT" and bearConfirmRaw and close < bearSetupRef
+
+bool bullEntryTrend = bullSetupType == "TREND LONG" and (bullConfirmRaw or (bullMicroBreak and bullContinuationRaw)) and close > math.max(bullSetupRef, highestPrevMicro)
+bool bearEntryTrend = bearSetupType == "TREND SHORT" and (bearConfirmRaw or (bearMicroBreak and bearContinuationRaw)) and close < math.min(bearSetupRef, lowestPrevMicro)
+
+bool bullEntryPressure = bullSetupType == "PRESSURE LONG" and bullContinuationRaw and (bullMicroBreak or bullConfirmRaw) and close > bullSetupRef and bullQuality > bearQuality + math.max(minSideGap - 2, 1)
+bool bearEntryPressure = bearSetupType == "PRESSURE SHORT" and bearContinuationRaw and (bearMicroBreak or bearConfirmRaw) and close < bearSetupRef and bearQuality > bullQuality + math.max(minSideGap - 2, 1)
+
+bool bullEntry = bullEntryBase and (bullEntryReaction or bullEntryTrend or bullEntryPressure)
+bool bearEntry = bearEntryBase and (bearEntryReaction or bearEntryTrend or bearEntryPressure)
+
+bool entryConflict = bullEntry and bearEntry
+bullEntry := bullEntry and not entryConflict
+bearEntry := bearEntry and not entryConflict
+
+if bullEntry
+    bullSetupLive := false
+if bearEntry
+    bearSetupLive := false
+
+// =====================================================
+// PRESENTATION LAYER: STATE SOURCE / LOCATION / MTF
+// =====================================================
+float bullLocationStructuralScore = bullLocation
+float bearLocationStructuralScore = bearLocation
+
+bool bullLocationExecutableRaw = selBullNear or sweepLow
+bool bearLocationExecutableRaw = selBearNear or sweepHigh
+bool dualExecutableLocation = bullLocationExecutableRaw and bearLocationExecutableRaw
+
+bool bullLocationDominant = bullQuality > bearQuality + minSideGap or (not (bearQuality > bullQuality + minSideGap) and bullLocationStructuralScore > bearLocationStructuralScore)
+bool bearLocationDominant = bearQuality > bullQuality + minSideGap or (not (bullQuality > bearQuality + minSideGap) and bearLocationStructuralScore > bullLocationStructuralScore)
+bool locationExecHasPriority = bullLocationDominant or bearLocationDominant
+
+bool bullLocationExecutablePrimary = bullLocationExecutableRaw and (not dualExecutableLocation or bullLocationDominant)
+bool bearLocationExecutablePrimary = bearLocationExecutableRaw and (not dualExecutableLocation or bearLocationDominant)
+
+bool bullLocationExecutableNow = bullLocationExecutablePrimary
+bool bearLocationExecutableNow = bearLocationExecutablePrimary
+
+string bullLocationExecutableText = locationExecutableText(dualExecutableLocation, bullLocationExecutableRaw, bullLocationExecutablePrimary, selBullNear, "LONG", "sweep low")
+string bearLocationExecutableText = locationExecutableText(dualExecutableLocation, bearLocationExecutableRaw, bearLocationExecutablePrimary, selBearNear, "SHORT", "sweep high")
+
+string currentBullTriggerText = bullTriggerText
+string currentBearTriggerText = bearTriggerText
+
+string bullStateSource = stateSourceText(execLabel, bullSetupLive, "LONG", bullSetupType, bullSetupReason, watchTrendLong, watchReactionLong, bullAccelStrong, "BULL ACCELERATION", bullCascadeStrong, "BULL CASCADE", endDownStrong, "END DOWN IMPULSE")
+string bearStateSource = stateSourceText(execLabel, bearSetupLive, "SHORT", bearSetupType, bearSetupReason, watchTrendShort, watchReactionShort, bearAccelStrong, "BEAR ACCELERATION", bearCascadeStrong, "BEAR CASCADE", endUpStrong, "END UP IMPULSE")
+
+
+string htfContextStatus = ""
+string ltfConfirmStatus = ""
+string bullLocalExecutionStatus = "Brak"
+string bearLocalExecutionStatus = "Brak"
+string localExecutionStatus = ""
+
+if execTf == "15"
+    htfContextStatus := "15m core | 60m " + biasTriText(ctx1Bull, ctx1Bear) + " | 240m " + biasTriText(ctx2Bull, ctx2Bear)
+    ltfConfirmStatus := "5m " + deltaRoleText(ltf1Delta) + " | 1m assist " + deltaRoleText(ltf2Delta)
+
+    bullLocalExecutionStatus := not bullLocationExecutableNow ? "LONG poza local execution" :
+         ltfLongBlocked ? "LONG delegated LTF not supportive yet" :
+         ltfBullSoft ? "LONG delegated LTF ready" :
+         "LONG czeka na delegated LTF confirm"
+
+    bearLocalExecutionStatus := not bearLocationExecutableNow ? "SHORT poza local execution" :
+         ltfShortBlocked ? "SHORT delegated LTF not supportive yet" :
+         ltfBearSoft ? "SHORT delegated LTF ready" :
+         "SHORT czeka na delegated LTF confirm"
+else if execTf == "5"
+    htfContextStatus := "15m HTF " + biasTriText(ctx1Bull, ctx1Bear) + " | 60m bg " + biasTriText(ctx2Bull, ctx2Bear)
+    ltfConfirmStatus := "1m " + deltaRoleText(ltf1Delta)
+
+    bullLocalExecutionStatus := not bullLocationExecutableNow ? "LONG poza local execution" :
+         ltfLongBlocked ? "LONG 1m not supportive yet" :
+         ltfBullSoft ? "LONG 1m ready" :
+         "LONG czeka na 1m confirm"
+
+    bearLocalExecutionStatus := not bearLocationExecutableNow ? "SHORT poza local execution" :
+         ltfShortBlocked ? "SHORT 1m not supportive yet" :
+         ltfBearSoft ? "SHORT 1m ready" :
+         "SHORT czeka na 1m confirm"
+else
+    htfContextStatus := "5m exec ctx " + biasTriText(ctx1Bull, ctx1Bear) + " | 15m bg " + biasTriText(ctx2Bull, ctx2Bear)
+    ltfConfirmStatus := "N/A on 1m"
+
+    bullLocalExecutionStatus := not bullLocationExecutableNow ? "LONG poza local execution" :
+         bullFailureRaw ? "LONG local failure" :
+         bullConfirmRaw ? "LONG micro confirmed" :
+         bullMicroBreak ? "LONG micro break only" :
+         "LONG w lokalizacji bez confirm"
+
+    bearLocalExecutionStatus := not bearLocationExecutableNow ? "SHORT poza local execution" :
+         bearFailureRaw ? "SHORT local failure" :
+         bearConfirmRaw ? "SHORT micro confirmed" :
+         bearMicroBreak ? "SHORT micro break only" :
+         "SHORT w lokalizacji bez confirm"
+
+localExecutionStatus := "L: " + bullLocalExecutionStatus + " | S: " + bearLocalExecutionStatus
+
+// =====================================================
+// POSITION / LEVELS / MANAGEMENT
+// =====================================================
+var bool posActive = false
+var int posDir = 0
+var string posType = ""
+var string posReason = ""
+var float posEntry = na
+var float posSL = na
+var float posTP1 = na
+var float posTP2 = na
+var float posQ = na
+var float posI = na
+var float posRisk = na
+var int posBar = na
+var bool posTP1Hit = false
+var float posSetupRef = na
+var float posSLAnchor = na
+var string posEntryMode = ""
+var string lastResult = "Brak"
+var string lastKillNote = "Brak"
+
+bool newEntry = not posActive and (bullEntry or bearEntry)
+
+if newEntry
+    posActive := true
+    posDir := bullEntry ? 1 : -1
+    posType := bullEntry ? bullSetupType : bearSetupType
+    posReason := bullEntry ? bullSetupReason : bearSetupReason
+    posEntry := close
+    posQ := bullEntry ? bullQuality : bearQuality
+    posI := bullEntry ? bullImpulse : bearImpulse
+    posBar := bar_index
+    posTP1Hit := false
+    posSetupRef := bullEntry ? bullSetupRef : bearSetupRef
+    posEntryMode := bullEntry ? (bullSetupType == "REACTION LONG" ? "RECLAIM" : bullSetupType == "PRESSURE LONG" ? "PRESSURE_BREAK" : "TREND_BREAK") : (bearSetupType == "REACTION SHORT" ? "RECLAIM" : bearSetupType == "PRESSURE SHORT" ? "PRESSURE_BREAK" : "TREND_BREAK")
+    lastKillNote := "Brak"
+
+    if bullEntry
+        float bullSignalAnchor = math.min(low, nz(low[1], low))
+        float bullMicroAnchor = nz(lowestPrevMicro, bullSignalAnchor)
+        float bullSwingAnchor = nz(lastSwingLow, bullMicroAnchor)
+        float bullZoneAnchor = selBullActive ? zoneBottom(selBullTop, selBullBot) : na
+        bool bullUseZoneAnchor = selBullActive and (selBullNear or posType == "REACTION LONG")
+        float bullBaseAnchor = bullUseZoneAnchor ? bullZoneAnchor : (posType == "REACTION LONG" ? bullSignalAnchor : math.min(bullMicroAnchor, bullSwingAnchor))
+        posSLAnchor := not na(bullFibInvalidation) and bullFibConfluence and na(bullZoneAnchor) ? math.min(bullBaseAnchor, bullFibInvalidation) : bullBaseAnchor
+        posSL := posSLAnchor - atr * 0.12
+        posRisk := math.max(posEntry - posSL, syminfo.mintick * 10)
+        float bullR1 = posType == "REACTION LONG" ? 1.00 : posType == "PRESSURE LONG" ? 1.15 : 1.30
+        float bullR2 = posType == "REACTION LONG" ? 1.80 : posType == "PRESSURE LONG" ? 2.00 : 2.30
+        float bullTP1R = posEntry + posRisk * bullR1
+        float bullTP2R = posEntry + posRisk * bullR2
+        float bullTP1Structure = selBearActive and zoneBottom(selBearTop, selBearBot) > posEntry + posRisk * 0.80 ? zoneBottom(selBearTop, selBearBot) : not na(lastSwingHigh) and lastSwingHigh > posEntry + posRisk * 0.80 ? lastSwingHigh : na
+        float bullTP2Structure = selBearActive and zoneTop(selBearTop, selBearBot) > posEntry + posRisk * 1.20 ? zoneTop(selBearTop, selBearBot) : not na(lastSwingHigh) and lastSwingHigh > posEntry + posRisk * 1.35 ? lastSwingHigh : na
+        float bullTP1Fib = fibProjectionWeight > 0 and not na(bullFibProjection1272) and bullFibProjection1272 > posEntry + posRisk * 0.75 ? bullFibProjection1272 : na
+        float bullTP2Fib = fibProjectionWeight > 0 and not na(bullFibProjection1618) and bullFibProjection1618 > posEntry + posRisk * 1.15 ? bullFibProjection1618 : na
+        posTP1 := bullTP1R
+        if not na(bullTP1Structure)
+            posTP1 := math.min(posTP1, bullTP1Structure)
+        if not na(bullTP1Fib)
+            posTP1 := math.min(posTP1, posEntry + (bullTP1Fib - posEntry) * fibProjectionWeight + (posTP1 - posEntry) * (1.0 - fibProjectionWeight))
+        float bullTP2Candidate = bullTP2R
+        if not na(bullTP2Structure)
+            bullTP2Candidate := math.max(bullTP2Candidate, bullTP2Structure)
+        if not na(bullTP2Fib)
+            bullTP2Candidate := math.max(bullTP2Candidate, posEntry + (bullTP2Fib - posEntry) * fibProjectionWeight + (bullTP2Candidate - posEntry) * (1.0 - fibProjectionWeight))
+        posTP2 := math.max(posTP1 + posRisk * 0.35, bullTP2Candidate)
+        if posTP2 <= posTP1
+            posTP2 := bullTP2R
+    else
+        float bearSignalAnchor = math.max(high, nz(high[1], high))
+        float bearMicroAnchor = nz(highestPrevMicro, bearSignalAnchor)
+        float bearSwingAnchor = nz(lastSwingHigh, bearMicroAnchor)
+        float bearZoneAnchor = selBearActive ? zoneTop(selBearTop, selBearBot) : na
+        bool bearUseZoneAnchor = selBearActive and (selBearNear or posType == "REACTION SHORT")
+        float bearBaseAnchor = bearUseZoneAnchor ? bearZoneAnchor : (posType == "REACTION SHORT" ? bearSignalAnchor : math.max(bearMicroAnchor, bearSwingAnchor))
+        posSLAnchor := not na(bearFibInvalidation) and bearFibConfluence and na(bearZoneAnchor) ? math.max(bearBaseAnchor, bearFibInvalidation) : bearBaseAnchor
+        posSL := posSLAnchor + atr * 0.12
+        posRisk := math.max(posSL - posEntry, syminfo.mintick * 10)
+        float bearR1 = posType == "REACTION SHORT" ? 1.00 : posType == "PRESSURE SHORT" ? 1.15 : 1.30
+        float bearR2 = posType == "REACTION SHORT" ? 1.80 : posType == "PRESSURE SHORT" ? 2.00 : 2.30
+        float bearTP1R = posEntry - posRisk * bearR1
+        float bearTP2R = posEntry - posRisk * bearR2
+        float bearTP1Structure = selBullActive and zoneTop(selBullTop, selBullBot) < posEntry - posRisk * 0.80 ? zoneTop(selBullTop, selBullBot) : not na(lastSwingLow) and lastSwingLow < posEntry - posRisk * 0.80 ? lastSwingLow : na
+        float bearTP2Structure = selBullActive and zoneBottom(selBullTop, selBullBot) < posEntry - posRisk * 1.20 ? zoneBottom(selBullTop, selBullBot) : not na(lastSwingLow) and lastSwingLow < posEntry - posRisk * 1.35 ? lastSwingLow : na
+        float bearTP1Fib = fibProjectionWeight > 0 and not na(bearFibProjection1272) and bearFibProjection1272 < posEntry - posRisk * 0.75 ? bearFibProjection1272 : na
+        float bearTP2Fib = fibProjectionWeight > 0 and not na(bearFibProjection1618) and bearFibProjection1618 < posEntry - posRisk * 1.15 ? bearFibProjection1618 : na
+        posTP1 := bearTP1R
+        if not na(bearTP1Structure)
+            posTP1 := math.max(posTP1, bearTP1Structure)
+        if not na(bearTP1Fib)
+            posTP1 := math.max(posTP1, posEntry - (posEntry - bearTP1Fib) * fibProjectionWeight - (posEntry - posTP1) * (1.0 - fibProjectionWeight))
+        float bearTP2Candidate = bearTP2R
+        if not na(bearTP2Structure)
+            bearTP2Candidate := math.min(bearTP2Candidate, bearTP2Structure)
+        if not na(bearTP2Fib)
+            bearTP2Candidate := math.min(bearTP2Candidate, posEntry - (posEntry - bearTP2Fib) * fibProjectionWeight - (posEntry - bearTP2Candidate) * (1.0 - fibProjectionWeight))
+        posTP2 := math.min(posTP1 - posRisk * 0.35, bearTP2Candidate)
+        if posTP2 >= posTP1
+            posTP2 := bearTP2R
+
+int posBarsHeld = posActive and not na(posBar) ? bar_index - posBar : 0
+
+bool ksWarnLong = false
+bool ksWarnShort = false
+bool ksHardLong = false
+bool ksHardShort = false
+float ksScoreLong = 0.0
+float ksScoreShort = 0.0
+string ksReasonLong = "Brak"
+string ksReasonShort = "Brak"
+string killStatusText = "Brak"
+
+if posActive
+    float progressRNow = posDir == 1 ? (high - posEntry) / posRisk : (posEntry - low) / posRisk
+
+    bool longSlow = posDir == 1 and posBarsHeld >= 2 and not posTP1Hit and progressRNow < 0.20
+    bool longMicroLost = posDir == 1 and ((bearMicroBreak or close < lowestPrevMicro) and close < emaFast)
+    bool longOpposing = posDir == 1 and (bearWarning or bearReactionRaw or bearContinuationRaw)
+    bool longLtfAgainst = posDir == 1 and hasAnyLtf and (ltfLongBlocked or ltfDelta <= -1.5)
+    bool longNoRecovery = posDir == 1 and close < posEntry and close < emaFast and close < posSetupRef
+    bool longZoneLost = posDir == 1 and selBullActive and close < zoneMid(selBullTop, selBullBot)
+    bool longHardFlow = posDir == 1 and posBarsHeld >= 1 and close < posEntry and bearContinuationRaw and (longLtfAgainst or bearMicroBreak)
+    bool longMajorDamage = longMicroLost or longOpposing or longLtfAgainst or longZoneLost
+
+    bool shortSlow = posDir == -1 and posBarsHeld >= 2 and not posTP1Hit and progressRNow < 0.20
+    bool shortMicroLost = posDir == -1 and ((bullMicroBreak or close > highestPrevMicro) and close > emaFast)
+    bool shortOpposing = posDir == -1 and (bullWarning or bullReactionRaw or bullContinuationRaw)
+    bool shortLtfAgainst = posDir == -1 and hasAnyLtf and (ltfShortBlocked or ltfDelta >= 1.5)
+    bool shortNoRecovery = posDir == -1 and close > posEntry and close > emaFast and close > posSetupRef
+    bool shortZoneLost = posDir == -1 and selBearActive and close > zoneMid(selBearTop, selBearBot)
+    bool shortHardFlow = posDir == -1 and posBarsHeld >= 1 and close > posEntry and bullContinuationRaw and (shortLtfAgainst or bullMicroBreak)
+    bool shortMajorDamage = shortMicroLost or shortOpposing or shortLtfAgainst or shortZoneLost
+
+    ksScoreLong += longSlow ? 1.5 : 0.0
+    ksScoreLong += longMicroLost ? 1.75 : 0.0
+    ksScoreLong += longOpposing ? 2.0 : 0.0
+    ksScoreLong += longLtfAgainst ? 1.5 : 0.0
+    ksScoreLong += longNoRecovery ? 1.25 : 0.0
+    ksScoreLong += longZoneLost ? 1.0 : 0.0
+    ksScoreLong += bullFailureRaw and posDir == 1 ? 3.5 : 0.0
+    ksScoreLong += longHardFlow ? 2.25 : 0.0
+
+    ksScoreShort += shortSlow ? 1.5 : 0.0
+    ksScoreShort += shortMicroLost ? 1.75 : 0.0
+    ksScoreShort += shortOpposing ? 2.0 : 0.0
+    ksScoreShort += shortLtfAgainst ? 1.5 : 0.0
+    ksScoreShort += shortNoRecovery ? 1.25 : 0.0
+    ksScoreShort += shortZoneLost ? 1.0 : 0.0
+    ksScoreShort += bearFailureRaw and posDir == -1 ? 3.5 : 0.0
+    ksScoreShort += shortHardFlow ? 2.25 : 0.0
+
+    ksWarnLong := posDir == 1 and ksScoreLong >= 4.0 and longMajorDamage
+    ksWarnShort := posDir == -1 and ksScoreShort >= 4.0 and shortMajorDamage
+
+    ksHardLong := posDir == 1 and (bullFailureRaw or longHardFlow or (ksScoreLong >= 6.75 and longMajorDamage and close < emaFast))
+    ksHardShort := posDir == -1 and (bearFailureRaw or shortHardFlow or (ksScoreShort >= 6.75 and shortMajorDamage and close > emaFast))
+
+    ksReasonLong := bullFailureRaw ? "LONG invalidated by bull failure" :
+         longHardFlow ? "Bear continuation took control of LONG" :
+         longOpposing and longLtfAgainst ? "Bear process + LTF against LONG" :
+         longMicroLost and longSlow ? "LONG lost tempo and microstructure" :
+         longNoRecovery ? "LONG failed to recover after entry" :
+         longZoneLost ? "LONG lost local defense zone" :
+         "LONG quality weakens"
+
+    ksReasonShort := bearFailureRaw ? "SHORT invalidated by bear failure" :
+         shortHardFlow ? "Bull continuation took control of SHORT" :
+         shortOpposing and shortLtfAgainst ? "Bull process + LTF against SHORT" :
+         shortMicroLost and shortSlow ? "SHORT lost tempo and microstructure" :
+         shortNoRecovery ? "SHORT failed to recover after entry" :
+         shortZoneLost ? "SHORT lost local defense zone" :
+         "SHORT quality weakens"
+
+    killStatusText := ksHardLong ? "KILL LONG" :
+         ksHardShort ? "KILL SHORT" :
+         ksWarnLong ? "EXIT RISK LONG" :
+         ksWarnShort ? "EXIT RISK SHORT" : "Brak"
+
+if posActive
+    float progressR = posDir == 1 ? (high - posEntry) / posRisk : (posEntry - low) / posRisk
+
+    if not posTP1Hit and ((posDir == 1 and high >= posTP1) or (posDir == -1 and low <= posTP1))
+        posTP1Hit := true
+
+    if progressR >= 0.80
+        if posDir == 1
+            posSL := math.max(posSL, posEntry + posRisk * 0.05)
+        else
+            posSL := math.min(posSL, posEntry - posRisk * 0.05)
+
+    if posTP1Hit
+        float trailCandidate = posDir == 1 ? math.max(trailLowBase - atr * 0.05, posEntry + posRisk * 0.05) : math.min(trailHighBase + atr * 0.05, posEntry - posRisk * 0.05)
+        if posDir == 1
+            posSL := math.max(posSL, trailCandidate)
+        else
+            posSL := math.min(posSL, trailCandidate)
+
+    bool hitSL = posDir == 1 ? low <= posSL : high >= posSL
+    bool hitTP2 = posDir == 1 ? high >= posTP2 : low <= posTP2
+    bool weakFollowThrough = posDir == 1 ? close < posSetupRef and close < emaFast : close > posSetupRef and close > emaFast
+    bool tempoFail = bar_index - posBar >= tempoBars and progressR < tempoMinR and not posTP1Hit and (weakFollowThrough or (bar_index - posBar >= tempoBars + 1 and progressR < tempoMinR * 0.65))
+    bool expired = bar_index - posBar >= expiryBars
+    bool ambiguousExit = hitSL and hitTP2
+    bool killNow = ksHardLong or ksHardShort
+
+    if hitSL
+        lastResult := posTP1Hit ? "TP1+TRAIL" : ambiguousExit ? "SL/AMBIG" : "SL"
+        posActive := false
+    else if hitTP2
+        lastResult := "TP2"
+        posActive := false
+    else if killNow
+        lastResult := ksHardLong ? "KILL LONG" : "KILL SHORT"
+        lastKillNote := ksHardLong ? ksReasonLong : ksHardShort ? ksReasonShort : "Brak"
+        posActive := false
+    else if tempoFail
+        lastResult := "TEMPO"
+        posActive := false
+    else if expired
+        lastResult := posTP1Hit ? "TP1+EXP" : "EXPIRED"
+        posActive := false
+
+float bullPostEntryHealth = posActive and posDir == 1 ? clamp100(bullScenarioScore * 0.65 + (100.0 - bullScenarioFailureRisk) * 0.35) : na
+float bearPostEntryHealth = posActive and posDir == -1 ? clamp100(bearScenarioScore * 0.65 + (100.0 - bearScenarioFailureRisk) * 0.35) : na
+string scenarioPostEntryText = not posActive ? "Brak" : posDir == 1 ? "LONG health " + strPct(bullPostEntryHealth) + " | fail " + strPct(bullScenarioFailureRisk) : "SHORT health " + strPct(bearPostEntryHealth) + " | fail " + strPct(bearScenarioFailureRisk)
+
+string currentStateSource = "Brak"
+if posActive
+    currentStateSource := execLabel + " ACTIVE " + posType + " | " + posReason
+else if bullEntry
+    currentStateSource := execLabel + " ENTRY LONG | " + bullSetupType + " | " + bullSetupReason
+else if bearEntry
+    currentStateSource := execLabel + " ENTRY SHORT | " + bearSetupType + " | " + bearSetupReason
+else if bullSetupLive
+    currentStateSource := bullStateSource
+else if bearSetupLive
+    currentStateSource := bearStateSource
+else if watchTrendLong or watchReactionLong or bullAccelStrong or bullCascadeStrong or endDownStrong
+    currentStateSource := bullStateSource
+else if watchTrendShort or watchReactionShort or bearAccelStrong or bearCascadeStrong or endUpStrong
+    currentStateSource := bearStateSource
+
+// =====================================================
+// STATE / REASON
+// =====================================================
+string stateText = "NO TRADE"
+color stateColor = color.new(color.gray, 10)
+string stateReason = "Brak aktywnej decyzji"
+string entryBlocker = "Brak"
+string bullEntryBlocker = "Brak blokera LONG"
+string bearEntryBlocker = "Brak blokera SHORT"
+
+string decisionSide = "NONE"
+bool hasLongDecisionProcess = bullEntry or bullSetupLive or watchTrendLong or watchReactionLong
+bool hasShortDecisionProcess = bearEntry or bearSetupLive or watchTrendShort or watchReactionShort
+bool hasDecisionProcess = hasLongDecisionProcess or hasShortDecisionProcess
+
+if posActive
+    decisionSide := posDir == 1 ? "LONG" : "SHORT"
+else if hasLongDecisionProcess and not hasShortDecisionProcess
+    decisionSide := "LONG"
+else if hasShortDecisionProcess and not hasLongDecisionProcess
+    decisionSide := "SHORT"
+else if hasLongDecisionProcess and hasShortDecisionProcess
+    decisionSide := bullQuality > bearQuality ? "LONG" : bearQuality > bullQuality ? "SHORT" : "NONE"
+
+// ETAP-1: scenario-state engine ordering (VALID -> WARNING -> SOFT_DETERIORATION -> FRAGILE -> SOFT_BLOCK -> HARD_INVALIDATION -> KILL_EXIT)
+string bullScenarioQuality = "WARNING"
+string bearScenarioQuality = "WARNING"
+string bullScenarioQualityReason = "LONG quality not strong enough"
+string bearScenarioQualityReason = "SHORT quality not strong enough"
+
+// --- Scenario quality classification (separation-only: no execution mutation) ---
+bool bullScenarioQualityValid = tfOk and not bullFailureRaw and (bullSetupLive or watchTrendLong or watchReactionLong or (bullQuality >= watchQ and bullContext >= 10 and bullTrigger >= setupTriggerMinLocal and not bullSetupOppositionHard))
+bool bearScenarioQualityValid = tfOk and not bearFailureRaw and (bearSetupLive or watchTrendShort or watchReactionShort or (bearQuality >= watchQ and bearContext >= 10 and bearTrigger >= setupTriggerMinLocal and not bearSetupOppositionHard))
+
+if bullFailureRaw
+    bullScenarioQuality := "HARD_INVALIDATION"
+    bullScenarioQualityReason := "Bull failure invalidates LONG thesis"
+else if bullScenarioQualityValid
+    bullScenarioQuality := bullRollingBackgroundConflict or bullCorrectionDestructive or bullApproachExhausted or bullManipulationRisk ? "WARNING" : "VALID"
+    bullScenarioQualityReason := bullScenarioQuality == "VALID" ? (bullManipulationSupport ? "LONG manipulation reclaim/absorption supports thesis" : bullSetupLive ? "LONG setup context validated" : "LONG thesis has valid context/trigger quality") :
+         bullManipulationRisk ? "LONG thesis in manipulation phase: wait for strict reclaim/absorption after sweep" :
+         bullCorrectionDestructive ? "LONG thesis valid, but pullback quality degrades in 20-50 bar background" :
+         bullApproachExhausted ? "LONG thesis valid, but approach looks late/exhausted in 20-50 bar background" :
+         "LONG thesis valid, but rolling background is rotational/hostile"
+else if bullWarning or bullAdvisoryWeakAgainst
+    bullScenarioQuality := "WARNING"
+    bullScenarioQualityReason := "LONG thesis has growing opposing pressure"
+
+if bearFailureRaw
+    bearScenarioQuality := "HARD_INVALIDATION"
+    bearScenarioQualityReason := "Bear failure invalidates SHORT thesis"
+else if bearScenarioQualityValid
+    bearScenarioQuality := bearRollingBackgroundConflict or bearCorrectionDestructive or bearApproachExhausted or bearManipulationRisk ? "WARNING" : "VALID"
+    bearScenarioQualityReason := bearScenarioQuality == "VALID" ? (bearManipulationSupport ? "SHORT manipulation reclaim/absorption supports thesis" : bearSetupLive ? "SHORT setup context validated" : "SHORT thesis has valid context/trigger quality") :
+         bearManipulationRisk ? "SHORT thesis in manipulation phase: wait for strict reclaim/absorption after sweep" :
+         bearCorrectionDestructive ? "SHORT thesis valid, but pullback quality degrades in 20-50 bar background" :
+         bearApproachExhausted ? "SHORT thesis valid, but approach looks late/exhausted in 20-50 bar background" :
+         "SHORT thesis valid, but rolling background is rotational/hostile"
+else if bearWarning or bearAdvisoryWeakAgainst
+    bearScenarioQuality := "WARNING"
+    bearScenarioQualityReason := "SHORT thesis has growing opposing pressure"
+
+bool bullExecutionGateBase = tfOk and bullLocationExecutableNow and not bullEntryAdvisoryHardBlock and (bullConfirmRaw or bullMicroBreak) and (bullTriggerActive or bullSetupLive)
+bool bearExecutionGateBase = tfOk and bearLocationExecutableNow and not bearEntryAdvisoryHardBlock and (bearConfirmRaw or bearMicroBreak) and (bearTriggerActive or bearSetupLive)
+
+bool bullExecutionPermissionNow = bullScenarioQuality != "HARD_INVALIDATION" and bullExecutionGateBase
+bool bearExecutionPermissionNow = bearScenarioQuality != "HARD_INVALIDATION" and bearExecutionGateBase
+
+// ETAP-1 marker: future post-liquidity response can be injected as an additional explanation layer before execution reason text.
+string bullExecutionPermissionReason = scenarioExecutionReason(bullExecutionPermissionNow, tfOk, bullScenarioQuality, bullLocationExecutableNow, ltfLongBlocked, bullEntryAdvisoryHardBlock, bullManipulationRisk, bullConfirmRaw or bullMicroBreak, bullTriggerActive or bullSetupLive, "LONG")
+string bearExecutionPermissionReason = scenarioExecutionReason(bearExecutionPermissionNow, tfOk, bearScenarioQuality, bearLocationExecutableNow, ltfShortBlocked, bearEntryAdvisoryHardBlock, bearManipulationRisk, bearConfirmRaw or bearMicroBreak, bearTriggerActive or bearSetupLive, "SHORT")
+
+// --- Survival state classification (separation-only from decision scoring) ---
+bool bullSurvivalHardInvalidation = bullFailureRaw or (posActive and posDir == 1 and ksHardLong)
+bool bearSurvivalHardInvalidation = bearFailureRaw or (posActive and posDir == -1 and ksHardShort)
+
+bool bullSurvivalWarningPressure = bullWarning or bullAdvisoryWeakAgainst or bullRollingBackgroundConflict or bullCorrectionDestructive or bullApproachExhausted or bullManipulationRisk or (posActive and posDir == 1 and ksWarnLong)
+bool bearSurvivalWarningPressure = bearWarning or bearAdvisoryWeakAgainst or bearRollingBackgroundConflict or bearCorrectionDestructive or bearApproachExhausted or bearManipulationRisk or (posActive and posDir == -1 and ksWarnShort)
+
+bool bullScenarioSoftDeterioration = bullScenarioQuality == "VALID" and ((bullWarning and bullAdvisoryWeakAgainst) or (bullSetupTerminalLost and bullWarning) or (not bullExecutionGateBase and bullWarning and not bullSetupTerminalLost))
+bool bearScenarioSoftDeterioration = bearScenarioQuality == "VALID" and ((bearWarning and bearAdvisoryWeakAgainst) or (bearSetupTerminalLost and bearWarning) or (not bearExecutionGateBase and bearWarning and not bearSetupTerminalLost))
+
+bool bullScenarioFragile = bullScenarioQuality == "VALID" and ((bullSetupTerminalLost and bullSurvivalWarningPressure) or (posActive and posDir == 1 and ksWarnLong) or (not bullExecutionGateBase and bullWarning and bullAdvisoryWeakAgainst and bullSetupTerminalLost))
+bool bearScenarioFragile = bearScenarioQuality == "VALID" and ((bearSetupTerminalLost and bearSurvivalWarningPressure) or (posActive and posDir == -1 and ksWarnShort) or (not bearExecutionGateBase and bearWarning and bearAdvisoryWeakAgainst and bearSetupTerminalLost))
+
+bool bullOrdinaryExecutionWaiting = bullScenarioQuality != "HARD_INVALIDATION" and not bullExecutionPermissionNow and (not bullLocationExecutableNow or not (bullConfirmRaw or bullMicroBreak) or not (bullTriggerActive or bullSetupLive))
+bool bearOrdinaryExecutionWaiting = bearScenarioQuality != "HARD_INVALIDATION" and not bearExecutionPermissionNow and (not bearLocationExecutableNow or not (bearConfirmRaw or bearMicroBreak) or not (bearTriggerActive or bearSetupLive))
+
+bool bullSoftBlockOpposition = ltfLongBlocked or bullEntryAdvisoryHardBlock
+bool bearSoftBlockOpposition = ltfShortBlocked or bearEntryAdvisoryHardBlock
+
+bool bullScenarioSoftBlock = bullScenarioQuality == "VALID" and not bullExecutionPermissionNow and bullSoftBlockOpposition and bullSurvivalWarningPressure and not bullScenarioSoftDeterioration and not bullScenarioFragile and not bullOrdinaryExecutionWaiting
+bool bearScenarioSoftBlock = bearScenarioQuality == "VALID" and not bearExecutionPermissionNow and bearSoftBlockOpposition and bearSurvivalWarningPressure and not bearScenarioSoftDeterioration and not bearScenarioFragile and not bearOrdinaryExecutionWaiting
+
+bool bullScenarioKillExit = posActive and posDir == 1 and ksHardLong
+bool bearScenarioKillExit = posActive and posDir == -1 and ksHardShort
+
+string bullScenarioStatePreManagement = bullScenarioFragile ? "FRAGILE" : bullScenarioSoftDeterioration ? "SOFT_DETERIORATION" : bullScenarioSoftBlock ? "SOFT_BLOCK" : bullSurvivalWarningPressure ? "WARNING" : "VALID"
+string bearScenarioStatePreManagement = bearScenarioFragile ? "FRAGILE" : bearScenarioSoftDeterioration ? "SOFT_DETERIORATION" : bearScenarioSoftBlock ? "SOFT_BLOCK" : bearSurvivalWarningPressure ? "WARNING" : "VALID"
+
+string bullScenarioState = bullScenarioKillExit ? "KILL_EXIT" : bullSurvivalHardInvalidation ? "HARD_INVALIDATION" : bullScenarioStatePreManagement
+string bearScenarioState = bearScenarioKillExit ? "KILL_EXIT" : bearSurvivalHardInvalidation ? "HARD_INVALIDATION" : bearScenarioStatePreManagement
+
+string bullScenarioStateReason = scenarioStateReasonText(bullScenarioState, bullFailureRaw, bullManipulationRisk, bullCorrectionDestructive, bullApproachExhausted, "LONG", "Bull")
+string bearScenarioStateReason = scenarioStateReasonText(bearScenarioState, bearFailureRaw, bearManipulationRisk, bearCorrectionDestructive, bearApproachExhausted, "SHORT", "Bear")
+
+string scenarioSide = decisionSide == "LONG" ? "LONG" : decisionSide == "SHORT" ? "SHORT" : bullQuality > bearQuality ? "LONG" : bearQuality > bullQuality ? "SHORT" : "NONE"
+string scenarioQualityText = pickSideString(scenarioSide, bullScenarioQuality, bearScenarioQuality, "WARNING")
+string scenarioQualityReason = pickSideString(scenarioSide, bullScenarioQualityReason, bearScenarioQualityReason, "No directional thesis")
+bool executionPermissionNow = pickSideBool(scenarioSide, bullExecutionPermissionNow, bearExecutionPermissionNow, false)
+string executionPermissionReason = pickSideString(scenarioSide, bullExecutionPermissionReason, bearExecutionPermissionReason, "No directional side selected")
+string scenarioSurvivalText = pickSideString(scenarioSide, bullScenarioState, bearScenarioState, "WARNING")
+string scenarioSurvivalReason = pickSideString(scenarioSide, bullScenarioStateReason, bearScenarioStateReason, "No active scenario side")
+string scenarioStateText = "ST:" + scenarioSurvivalText + " | Q:" + scenarioQualityText + " | X:" + (executionPermissionNow ? "NOW" : "BLOCKED")
+string scenarioManipulationReason = pickSideString(scenarioSide, bullManipulationText, bearManipulationText, "No manipulation side")
+string scenarioStatePreText = pickSideString(scenarioSide, bullScenarioStatePreManagement, bearScenarioStatePreManagement, "WARNING")
+string scenarioStateReason = composeScenarioReasonText(scenarioSurvivalReason, scenarioQualityReason, executionPermissionReason, scenarioStatePreText, marketRegimeState, scenarioManipulationReason)
+// ETAP-1 marker: future probabilistic layer should consume scenarioStateText/reason as read-only inputs.
+
+// --- Execution blockers (descriptive layer bound to existing execution gates) ---
+bullEntryBlocker := not tfOk ? "Nieprawidlowy TF uruchomienia" :
+     entryConflict ? "Konflikt LONG/SHORT" :
+     bullFailureRaw ? "Bull failure blocks LONG" :
+     bullEntryAdvisoryHardBlock ? "Advisory modules strongly against LONG" :
+     bearCascadeStrong ? "Bear LQ cascade strongly pressures LONG" :
+     bearAccelStrong ? "Bear acceleration strongly pressures LONG" :
+     endUpStrong ? "Distribution risk strongly pressures LONG" :
+     bearCascadeWeak ? "Cascade pressure down" :
+     bearAccelWeak ? "Acceleration down grows" :
+     endUpWeak ? "Distribution risk" :
+     dualExecutableLocation and not locationExecHasPriority ? "Dual / conflict location" :
+     ltfLongBlocked ? bullLtfBlockerText(execTf, ltf1Delta, ltf2Delta, ltfEntryBlockThreshold) :
+     bullWarning ? "LONG weakens / bear side rising" :
+     hasAnyLtf and bullQuality > bearQuality and not ltfBullSoft ? bullLtfWaitText(execTf, ltf1Delta) :
+     bullSetupLive and not bullConfirmRaw ? "Brak bull confirm" :
+     not bullLocationExecutableNow ? "Brak lokalizacji wykonawczej LONG teraz" :
+     bullQuality <= watchQ and bearQuality <= watchQ ? "Brak przewagi" :
+     not bullTriggerActive ? "Brak wybicia triggera LONG" :
+     "Brak blokera LONG"
+bearEntryBlocker := not tfOk ? "Nieprawidlowy TF uruchomienia" :
+     entryConflict ? "Konflikt LONG/SHORT" :
+     bearFailureRaw ? "Bear failure blocks SHORT" :
+     bearEntryAdvisoryHardBlock ? "Advisory modules strongly against SHORT" :
+     bullCascadeStrong ? "Bull LQ cascade strongly pressures SHORT" :
+     bullAccelStrong ? "Bull acceleration strongly pressures SHORT" :
+     endDownStrong ? "Accumulation risk strongly pressures SHORT" :
+     bullCascadeWeak ? "Cascade pressure up" :
+     bullAccelWeak ? "Acceleration up grows" :
+     endDownWeak ? "Accumulation risk" :
+     dualExecutableLocation and not locationExecHasPriority ? "Dual / conflict location" :
+     ltfShortBlocked ? bearLtfBlockerText(execTf, ltf1Delta, ltf2Delta, ltfEntryBlockThreshold) :
+     bearWarning ? "SHORT weakens / bull side rising" :
+     hasAnyLtf and bearQuality > bullQuality and not ltfBearSoft ? bearLtfWaitText(execTf, ltf1Delta) :
+     bearSetupLive and not bearConfirmRaw ? "Brak bear confirm" :
+     not bearLocationExecutableNow ? "Brak lokalizacji wykonawczej SHORT teraz" :
+     bullQuality <= watchQ and bearQuality <= watchQ ? "Brak przewagi" :
+     not bearTriggerActive ? "Brak wybicia triggera SHORT" :
+     "Brak blokera SHORT"
+
+if posActive
+    entryBlocker := posDir == 1 ? bullEntryBlocker : bearEntryBlocker
+else if decisionSide == "LONG"
+    entryBlocker := bullEntryBlocker
+else if decisionSide == "SHORT"
+    entryBlocker := bearEntryBlocker
+else if dualExecutableLocation and not locationExecHasPriority
+    entryBlocker := "RAW dual/conflict location bez priorytetu"
+else if bullQuality <= watchQ and bearQuality <= watchQ
+    entryBlocker := "Brak przewagi"
+else if not hasDecisionProcess
+    entryBlocker := "Brak aktywnego procesu wejscia"
+else
+    entryBlocker := "Brak strony decyzyjnej"
+
+bool killWarnActive = posActive and (ksWarnLong or ksWarnShort)
+// --- Final state / reason projection (observability follows execution result) ---
+stateText := posActive ? (killWarnActive ? "ACTIVE " + posType + " | EXIT RISK" : "ACTIVE " + posType) :
+     bullEntry ? "ENTRY " + bullSetupType :
+     bearEntry ? "ENTRY " + bearSetupType :
+     bullSetupLive ? "SETUP " + bullSetupType :
+     bearSetupLive ? "SETUP " + bearSetupType :
+     watchReactionLong ? "WATCH REACTION LONG" :
+     watchReactionShort ? "WATCH REACTION SHORT" :
+     watchTrendLong ? "WATCH TREND LONG" :
+     watchTrendShort ? "WATCH TREND SHORT" :
+     bullWarning ? "WARNING LONG WEAKENING" :
+     bearWarning ? "WARNING SHORT WEAKENING" :
+     endUpStrong ? "WARNING DISTRIBUTION RISK" :
+     endDownStrong ? "WARNING ACCUMULATION RISK" :
+     bearAccelStrong ? "WARNING BEAR ACCELERATION" :
+     bullAccelStrong ? "WARNING BULL ACCELERATION" :
+     bearCascadeStrong ? "WARNING BEAR CASCADE" :
+     bullCascadeStrong ? "WARNING BULL CASCADE" :
+     "NO TRADE"
+stateColor := posActive ? (killWarnActive ? color.new(color.orange, 0) : color.new(posDir == 1 ? color.green : color.red, 0)) :
+     bullEntry ? color.new(color.green, 0) :
+     bearEntry ? color.new(color.red, 0) :
+     bullSetupLive ? color.new(color.green, 18) :
+     bearSetupLive ? color.new(color.red, 18) :
+     watchReactionLong ? color.new(color.green, 38) :
+     watchReactionShort ? color.new(color.red, 38) :
+     watchTrendLong ? color.new(color.green, 52) :
+     watchTrendShort ? color.new(color.red, 52) :
+     bullWarning or bearWarning ? color.new(color.orange, 12) :
+     endUpStrong or endDownStrong ? color.new(color.orange, 8) :
+     bearAccelStrong ? color.new(color.red, 22) :
+     bullAccelStrong ? color.new(color.green, 22) :
+     bearCascadeStrong ? color.new(color.red, 28) :
+     bullCascadeStrong ? color.new(color.green, 28) :
+     color.new(color.gray, 10)
+stateReason := posActive ? (ksWarnLong ? reasonFinal("ACTIVE LONG with exit risk | " + ksReasonLong) : ksWarnShort ? reasonFinal("ACTIVE SHORT with exit risk | " + ksReasonShort) : reasonFinal("ACTIVE position after confirmed entry")) :
+     bullEntry ? reasonFinal("ENTRY LONG | breakout confirmed above setup reference") :
+     bearEntry ? reasonFinal("ENTRY SHORT | breakout confirmed below setup reference") :
+     bullSetupLive ? (bullConfirmRaw ? reasonFinal("SETUP LONG | local confirm present, waiting for entry trigger") : reasonFinal("SETUP LONG | waiting for local confirm")) :
+     bearSetupLive ? (bearConfirmRaw ? reasonFinal("SETUP SHORT | local confirm present, waiting for entry trigger") : reasonFinal("SETUP SHORT | waiting for local confirm")) :
+     watchReactionLong ? reasonFinal("WATCH LONG | reaction context valid, setup not armed yet") :
+     watchReactionShort ? reasonFinal("WATCH SHORT | reaction context valid, setup not armed yet") :
+     watchTrendLong ? reasonFinal("WATCH LONG | trend continuation valid, setup not armed yet") :
+     watchTrendShort ? reasonFinal("WATCH SHORT | trend continuation valid, setup not armed yet") :
+     bullWarning ? reasonFinal("warning on LONG side | " + bullWeakReason) :
+     bearWarning ? reasonFinal("warning on SHORT side | " + bearWeakReason) :
+     endUpStrong ? reasonFinal("warning | distribution risk / up impulse exhausted") :
+     endDownStrong ? reasonFinal("warning | accumulation risk / down impulse exhausted") :
+     bearAccelStrong ? reasonFinal("warning | bear acceleration dominates local tape") :
+     bullAccelStrong ? reasonFinal("warning | bull acceleration dominates local tape") :
+     bearCascadeStrong ? reasonFinal("warning | bear liquidity cascade dominates") :
+     bullCascadeStrong ? reasonFinal("warning | bull liquidity cascade dominates") :
+     reasonFinal("NO TRADE | " + entryBlocker)
+
+stateReason := stateReason + " || " + scenarioStateText + " || " + scenarioStateReason
+
+// =====================================================
+// ZONES DRAW
+// =====================================================
+var box bxBull = na
+var box bxBear = na
+var label lbBull = na
+var label lbBear = na
+var bool prevBullZoneVisible = false
+var bool prevBearZoneVisible = false
+var float prevBullZoneTop = na
+var float prevBullZoneBot = na
+var float prevBearZoneTop = na
+var float prevBearZoneBot = na
+var string prevBullZoneText = ""
+var string prevBearZoneText = ""
+
+int zoneLabelOffsetBars = isMinimal ? 6 : 8
+float zoneLabelPad = atr * (isMinimal ? 0.05 : 0.08)
+string bullZoneLabelText = zoneLabelText(true, selBullType, selBullFresh, selBullTouches)
+string bearZoneLabelText = zoneLabelText(false, selBearType, selBearFresh, selBearTouches)
+bool bullZoneVisible = showZones and selBullActive and (viewMode == "Audit" or selBullNear or selBullFresh)
+bool bearZoneVisible = showZones and selBearActive and (viewMode == "Audit" or selBearNear or selBearFresh)
+float bullZoneTopNow = zoneTop(selBullTop, selBullBot)
+float bullZoneBotNow = zoneBottom(selBullTop, selBullBot)
+float bearZoneTopNow = zoneTop(selBearTop, selBearBot)
+float bearZoneBotNow = zoneBottom(selBearTop, selBearBot)
+
+bool bullZoneChanged = bullZoneVisible != prevBullZoneVisible or bullZoneTopNow != prevBullZoneTop or bullZoneBotNow != prevBullZoneBot or bullZoneLabelText != prevBullZoneText
+bool bearZoneChanged = bearZoneVisible != prevBearZoneVisible or bearZoneTopNow != prevBearZoneTop or bearZoneBotNow != prevBearZoneBot or bearZoneLabelText != prevBearZoneText
+
+bxBull := upsertZoneBox(bxBull, bullZoneVisible, bar_index - 3, bar_index + 8, bullZoneTopNow, bullZoneBotNow, color.new(color.teal, isMinimal ? 92 : 84), color.new(color.teal, 22))
+lbBull := upsertLeftLabel(lbBull, bullZoneVisible, bar_index + zoneLabelOffsetBars, bullZoneBotNow - zoneLabelPad, bullZoneLabelText, color.new(color.teal, 22), color.white, isMinimal ? size.small : size.normal)
+bxBear := upsertZoneBox(bxBear, bearZoneVisible, bar_index - 3, bar_index + 8, bearZoneTopNow, bearZoneBotNow, color.new(color.red, isMinimal ? 92 : 84), color.new(color.red, 22))
+lbBear := upsertLeftLabel(lbBear, bearZoneVisible, bar_index + zoneLabelOffsetBars, bearZoneTopNow + zoneLabelPad, bearZoneLabelText, color.new(color.red, 18), color.white, isMinimal ? size.small : size.normal)
+
+if bullZoneChanged
+    prevBullZoneVisible := bullZoneVisible
+    prevBullZoneTop := bullZoneTopNow
+    prevBullZoneBot := bullZoneBotNow
+    prevBullZoneText := bullZoneLabelText
+if bearZoneChanged
+    prevBearZoneVisible := bearZoneVisible
+    prevBearZoneTop := bearZoneTopNow
+    prevBearZoneBot := bearZoneBotNow
+    prevBearZoneText := bearZoneLabelText
+
+// =====================================================
+// LEVELS / LABELS
+// =====================================================
+var line lnEntry = na
+var line lnSL = na
+var line lnTP1 = na
+var line lnTP2 = na
+var label lbEntry = na
+var label lbSL = na
+var label lbTP1 = na
+var label lbTP2 = na
+
+bool levelsVisible = showLevels and posActive
+bool levelLabelsVisible = levelsVisible and showLevelLabels
+int levelX1 = bar_index - 1
+int levelX2 = bar_index + 10
+
+lnEntry := upsertHLine(lnEntry, levelsVisible, levelX1, levelX2, posEntry, color.new(color.white, 0), line.style_solid, 2)
+lnSL := upsertHLine(lnSL, levelsVisible, levelX1, levelX2, posSL, color.new(color.red, 0), line.style_solid, 2)
+lnTP1 := upsertHLine(lnTP1, levelsVisible, levelX1, levelX2, posTP1, color.new(color.green, 0), line.style_dashed, 2)
+lnTP2 := upsertHLine(lnTP2, levelsVisible, levelX1, levelX2, posTP2, color.new(color.teal, 0), line.style_dotted, 2)
+
+string entryLabelText = posDir == 1 ? "WEJDZ LONG TU" : "WEJDZ SHORT TU"
+string tp1LabelText = posTP1Hit ? "TP1 HIT" : "TP1 TU"
+lbEntry := upsertLeftLabel(lbEntry, levelLabelsVisible, levelX2, posEntry, entryLabelText, color.new(color.black, 8), color.white, isMinimal ? size.small : size.normal)
+lbSL := upsertLeftLabel(lbSL, levelLabelsVisible, levelX2, posSL, "SL TU", color.new(color.red, 6), color.white, isMinimal ? size.small : size.normal)
+lbTP1 := upsertLeftLabel(lbTP1, levelLabelsVisible, levelX2, posTP1, tp1LabelText, color.new(color.green, 8), color.white, isMinimal ? size.small : size.normal)
+lbTP2 := upsertLeftLabel(lbTP2, levelLabelsVisible, levelX2, posTP2, "TP2 TU", color.new(color.teal, 8), color.white, isMinimal ? size.small : size.normal)
+
+// =====================================================
+// STATE LABEL / STICKER (BOTTOM-LEFT FIXED PANEL)
+// =====================================================
+var table statePanel = table.new(position.bottom_left, 2, 9, border_width=0)
+
+float biasSum = math.max(bullQuality + bearQuality, 0.0001)
+float impulseSum = math.max(bullImpulse + bearImpulse, 0.0001)
+int biasLongPct = int(math.round(100.0 * bullQuality / biasSum))
+int biasShortPct = 100 - biasLongPct
+int impulseLongPct = int(math.round(100.0 * bullImpulse / impulseSum))
+int impulseShortPct = 100 - impulseLongPct
+
+int uiFocusSide = decisionSide == "LONG" ? 1 : decisionSide == "SHORT" ? -1 : bullQuality >= bearQuality ? 1 : -1
+string uiFocusName = uiFocusSide == 1 ? "LONG" : "SHORT"
+
+string uiExecFocusText = uiFocusSide == 1 ? uiExecSideText(bullLocationExecutableNow, bullConfirmRaw, bullMicroBreak, "LONG") : uiExecSideText(bearLocationExecutableNow, bearConfirmRaw, bearMicroBreak, "SHORT")
+string uiConfirmFocusText = uiFocusSide == 1 ? uiConfirmSideText(bullConfirmRaw, bullFailureRaw, bullMicroBreak, "Bull") : uiConfirmSideText(bearConfirmRaw, bearFailureRaw, bearMicroBreak, "Bear")
+string uiAdvisoryFocusText = uiFocusSide == 1 ? uiAdvisoryForLongFocus(bearCascadeStrong, bearAccelStrong, endUpStrong, bearCascadeWeak, bearAccelWeak, endUpWeak, bearWarning) : uiAdvisoryForShortFocus(bullCascadeStrong, bullAccelStrong, endDownStrong, bullCascadeWeak, bullAccelWeak, endDownWeak, bullWarning)
+
+string uiExecNowText = posActive ? "TAK | pozycja aktywna" : uiExecFocusText
+string uiConfirmCompact = uiConfirmFocusText
+string uiBiasCompact = "LONG " + str.tostring(biasLongPct) + " | SHORT " + str.tostring(biasShortPct)
+string uiAdvisoryCompact = uiAdvisoryFocusText
+string uiReasonCompact = posActive ? (posDir == 1 ? ksReasonLong : ksReasonShort) : stateReason
+
+color panelHeaderBg = color.new(stateColor, isMinimal ? 4 : 0)
+color panelKeyBg = color.new(color.black, 20)
+color panelValBg = color.new(color.black, 2)
+color panelText = color.white
+
+leftPanelRow(int r, string k, string v, color keyBg, color valBg, color txtColor) =>
+    table.cell(statePanel, 0, r, " " + k + " ", bgcolor=keyBg, text_color=txtColor, text_halign=text.align_left, text_size=isMinimal ? size.small : size.normal)
+    table.cell(statePanel, 1, r, " " + v + " ", bgcolor=valBg, text_color=txtColor, text_halign=text.align_left, text_size=isMinimal ? size.small : size.normal)
+
+if showStateLabel and barstate.islast
+    leftPanelRow(0, "STATE", stateText, panelHeaderBg, panelHeaderBg, panelText)
+    leftPanelRow(1, "EXEC NOW", uiExecNowText, panelKeyBg, panelValBg, panelText)
+    leftPanelRow(2, "BLOCKER", entryBlocker, panelKeyBg, panelValBg, panelText)
+    leftPanelRow(3, "CONFIRM", uiConfirmCompact, panelKeyBg, panelValBg, panelText)
+    leftPanelRow(4, "BIAS", uiBiasCompact, panelKeyBg, panelValBg, panelText)
+    leftPanelRow(5, "ADVISORY", uiAdvisoryCompact, panelKeyBg, panelValBg, panelText)
+    leftPanelRow(6, "REASON", showReasons ? uiReasonCompact : "Ukryte", panelKeyBg, panelValBg, panelText)
+    // bottom padding rows stay transparent so the content sits just above the TradingView logo
+    table.cell(statePanel, 0, 7, "", bgcolor=color.new(color.black, 100))
+    table.cell(statePanel, 1, 7, "", bgcolor=color.new(color.black, 100))
+    table.cell(statePanel, 0, 8, "", bgcolor=color.new(color.black, 100))
+    table.cell(statePanel, 1, 8, "", bgcolor=color.new(color.black, 100))
+else if barstate.islast
+    for r = 0 to 8
+        table.cell(statePanel, 0, r, "", bgcolor=color.new(color.black, 100))
+        table.cell(statePanel, 1, r, "", bgcolor=color.new(color.black, 100))
+
+// =====================================================
+// NEAREST OBSTACLES
+// =====================================================
+string aboveName = "Brak"
+string belowName = "Brak"
+
+if selBearActive and zoneTop(selBearTop, selBearBot) >= close
+    aboveName := zoneLabelText(false, selBearType, selBearFresh, selBearTouches)
+
+if selBullActive and zoneBottom(selBullTop, selBullBot) <= close
+    belowName := zoneLabelText(true, selBullType, selBullFresh, selBullTouches)
+
+// =====================================================
+// DASHBOARD
+// =====================================================
+var table dash = table.new(position.top_right, 2, 33, border_width=0)
+
+string bullZoneText = selBullActive ? zoneLabelText(true, selBullType, selBullFresh, selBullTouches) : "Brak"
+string bearZoneText = selBearActive ? zoneLabelText(false, selBearType, selBearFresh, selBearTouches) : "Brak"
+string killDashText = posActive ? killStatusText : lastKillNote
+string cascadeDashText = bullCascadeStrong ? "UP STRONG" : bullCascadeWeak ? "UP WEAK" : bearCascadeStrong ? "DOWN STRONG" : bearCascadeWeak ? "DOWN WEAK" : "Brak"
+string accelDashText = bullAccelStrong ? "UP STRONG" : bullAccelWeak ? "UP WEAK" : bearAccelStrong ? "DOWN STRONG" : bearAccelWeak ? "DOWN WEAK" : "Brak"
+string endImpulseDashText = endDownStrong ? "DOWN STRONG" : endDownWeak ? "DOWN WEAK" : endUpStrong ? "UP STRONG" : endUpWeak ? "UP WEAK" : "Brak"
+
+string dashFocusTrigger = pickFocusString(uiFocusSide, currentBullTriggerText, currentBearTriggerText)
+string dashFocusZone = pickFocusString(uiFocusSide, bullZoneText, bearZoneText)
+string dashFocusObstacle = pickFocusString(uiFocusSide, aboveName, belowName)
+string dashFocusConfirm = uiConfirmCompact + " | " + failureText
+string dashQualityText = dashQualitySummaryText(uiFocusName, uiFocusSide, bullQuality, bearQuality, bullImpulse, bearImpulse)
+string dashScenarioText = dashScenarioSummaryText(uiFocusName, uiFocusSide, bullScenarioScore, bearScenarioScore, bullScenarioFailureRisk, bearScenarioFailureRisk)
+string dashMtfText = "HTF " + softBiasText + " | " + ltfConfirmStatus
+string dashContextText = dashContextSummaryText(segmentState, regimeText, bullContext, bearContext)
+string dashExecText = "Exec " + uiExecNowText + " | Focus " + uiFocusName
+string dashFocusLocationText = pickFocusString(uiFocusSide, bullLocationExecutableText, bearLocationExecutableText)
+string dashFibText = dashFibSummaryText(useFibContext, uiFocusSide, bullFibConfluence, bullFibNear, bearFibConfluence, bearFibNear)
+string dashKillRiskText = killDashText == "Brak" ? "Brak" : killDashText
+
+color dashHeaderBg = color.new(color.black, 0)
+color dashSectionBg = color.new(color.silver, 78)
+color dashSectionText = color.black
+color dashLabelBg = color.new(color.gray, 70)
+color dashValueBg = color.new(color.white, 80)
+color dashLabelText = color.black
+color dashValueText = color.black
+color dashSepBg = color.new(color.black, 100)
+color dashSepText = color.new(color.gray, 50)
+string dashSepLeft = "────────"
+string dashSepRight = "────────────────────────"
+
+dashSectionRow(int r, string title, string desc) =>
+    table.cell(dash, 0, r, title, bgcolor=dashSectionBg, text_color=dashSectionText, text_size=size.small)
+    table.cell(dash, 1, r, desc, bgcolor=dashSectionBg, text_color=dashSectionText, text_size=size.small)
+
+dashDataRow(int r, string labelTxt, string valueTxt) =>
+    table.cell(dash, 0, r, labelTxt, bgcolor=dashLabelBg, text_color=dashLabelText, text_size=size.small)
+    table.cell(dash, 1, r, valueTxt, bgcolor=dashValueBg, text_color=dashValueText, text_size=size.small)
+
+dashSepRow(int r) =>
+    table.cell(dash, 0, r, dashSepLeft, bgcolor=dashSepBg, text_color=dashSepText, text_size=size.tiny)
+    table.cell(dash, 1, r, dashSepRight, bgcolor=dashSepBg, text_color=dashSepText, text_size=size.tiny)
+
+if showDashboard and barstate.islast
+    table.cell(dash, 0, 0, "VSA 4.1", bgcolor=dashHeaderBg, text_color=color.white, text_size=size.small)
+    table.cell(dash, 1, 0, stateText, bgcolor=stateColor, text_color=color.white, text_size=size.small)
+
+    dashSectionRow(1, "DECYZJA", "stan / blocker / confirm / trigger")
+    dashDataRow(2, "Decyzja", dashExecText)
+    dashSepRow(3)
+    dashDataRow(4, "Bloker", entryBlocker)
+    dashSepRow(5)
+    dashDataRow(6, "Confirm", dashFocusConfirm)
+    dashSepRow(7)
+    dashDataRow(8, "Trigger", dashFocusTrigger)
+
+    dashSectionRow(9, "LOKALIZACJA", "strefa / miejsce / przeszkoda / fib")
+    dashDataRow(10, "Strefa", dashFocusZone)
+    dashSepRow(11)
+    dashDataRow(12, "Miejsce", dashFocusLocationText)
+    dashSepRow(13)
+    dashDataRow(14, "Przeszkoda", dashFocusObstacle + " | wynik " + lastResult)
+    dashSepRow(15)
+    dashDataRow(16, "Fib", dashFibText)
+
+    dashSectionRow(17, "KONTEKST", "HTF / LTF / segment / bias")
+    dashDataRow(18, "HTF / LTF", dashMtfText)
+    dashSepRow(19)
+    dashDataRow(20, "Kontekst", dashContextText)
+    dashSepRow(21)
+    dashDataRow(22, "Bias / feed", "L " + str.tostring(biasLongPct) + " / S " + str.tostring(biasShortPct) + " | " + feedContext())
+
+    dashSectionRow(23, "OSTRZEŻENIA", "cascade / accel / end / kill")
+    dashDataRow(24, "Cascade", cascadeDashText)
+    dashSepRow(25)
+    dashDataRow(26, "Accel", accelDashText)
+    dashSepRow(27)
+    dashDataRow(28, "End risk", endImpulseDashText)
+    dashSepRow(29)
+    dashDataRow(30, "Kill risk", dashKillRiskText)
+
+    dashSectionRow(31, "JAKOŚĆ", "quality / scenario / detail")
+    dashDataRow(32, "Jakosc", dashQualityText + " | " + (posActive ? scenarioPostEntryText : dashScenarioText))
+// =====================================================
+// ALERTS
+// =====================================================
+bool watchTrendLongEdge = watchTrendLong and not watchTrendLong[1]
+bool watchReactionLongEdge = watchReactionLong and not watchReactionLong[1]
+bool watchTrendShortEdge = watchTrendShort and not watchTrendShort[1]
+bool watchReactionShortEdge = watchReactionShort and not watchReactionShort[1]
+bool setupLongEdge = bullSetupLive and not bullSetupLive[1]
+bool setupShortEdge = bearSetupLive and not bearSetupLive[1]
+bool ksWarnLongEdge = ksWarnLong and not ksWarnLong[1]
+bool ksWarnShortEdge = ksWarnShort and not ksWarnShort[1]
+bool ksHardLongEdge = ksHardLong and not ksHardLong[1]
+bool ksHardShortEdge = ksHardShort and not ksHardShort[1]
+bool bullCascadeStrongEdge = bullCascadeStrong and not bullCascadeStrong[1]
+bool bearCascadeStrongEdge = bearCascadeStrong and not bearCascadeStrong[1]
+bool bullAccelStrongEdge = bullAccelStrong and not bullAccelStrong[1]
+bool bearAccelStrongEdge = bearAccelStrong and not bearAccelStrong[1]
+bool endUpStrongEdge = endUpStrong and not endUpStrong[1]
+bool endDownStrongEdge = endDownStrong and not endDownStrong[1]
+
+alertcondition(watchTrendLongEdge, "WATCH TREND LONG", "WATCH TREND LONG")
+alertcondition(watchReactionLongEdge, "WATCH REACTION LONG", "WATCH REACTION LONG")
+alertcondition(watchTrendShortEdge, "WATCH TREND SHORT", "WATCH TREND SHORT")
+alertcondition(watchReactionShortEdge, "WATCH REACTION SHORT", "WATCH REACTION SHORT")
+alertcondition(setupLongEdge, "SETUP LONG", "SETUP LONG")
+alertcondition(setupShortEdge, "SETUP SHORT", "SETUP SHORT")
+alertcondition(bullEntry, "ENTRY LONG", "ENTRY LONG")
+alertcondition(bearEntry, "ENTRY SHORT", "ENTRY SHORT")
+alertcondition(ksWarnLongEdge, "EXIT RISK LONG", "EXIT RISK LONG")
+alertcondition(ksWarnShortEdge, "EXIT RISK SHORT", "EXIT RISK SHORT")
+alertcondition(ksHardLongEdge, "KILL LONG", "KILL LONG")
+alertcondition(ksHardShortEdge, "KILL SHORT", "KILL SHORT")
+alertcondition(bullCascadeStrongEdge, "CASCADE PRESSURE UP", "CASCADE PRESSURE UP")
+alertcondition(bearCascadeStrongEdge, "CASCADE PRESSURE DOWN", "CASCADE PRESSURE DOWN")
+alertcondition(bullAccelStrongEdge, "ACCELERATION UP", "ACCELERATION UP")
+alertcondition(bearAccelStrongEdge, "ACCELERATION DOWN", "ACCELERATION DOWN")
+alertcondition(endUpStrongEdge, "END OF IMPULSE UP", "END OF IMPULSE UP")
+alertcondition(endDownStrongEdge, "END OF IMPULSE DOWN", "END OF IMPULSE DOWN")
