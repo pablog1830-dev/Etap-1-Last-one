@@ -117,10 +117,6 @@ scoreToInt(float x) =>
 strPct(float x) =>
     str.tostring(scoreToInt(x)) + "%"
 
-dirName(int d) =>
-    d == 1 ? "LONG" : d == -1 ? "SHORT" : "NONE"
-
-
 // --- Helper domain: price levels / zone geometry ---
 zoneTouched(float zTop, float zBot) =>
     not na(zTop) and not na(zBot) and low <= math.max(zTop, zBot) and high >= math.min(zTop, zBot)
@@ -193,14 +189,6 @@ deltaRoleText(float d) =>
 
 reasonFinal(string msg) =>
     "Final decision: " + msg
-
-locationStructuralText(bool active, string zoneType, bool nearZone, bool fresh, int touches, bool sweepNow, string sweepLabel) =>
-    string txt = "Brak"
-    if active
-        txt := zoneType + " | " + (nearZone ? "Near" : "Stored") + " | " + (fresh ? "Fresh" : "Retest x" + str.tostring(touches)) + (sweepNow ? " | " + sweepLabel : "")
-    else if sweepNow
-        txt := sweepLabel + " bez aktywnej strefy"
-    txt
 
 locationExecutableText(bool dualExec, bool execRaw, bool execPrimary, bool nearZone, string sideName, string sweepLabel) =>
     string txt = "NIE | poza lokalizacja " + sideName + " teraz"
@@ -1920,14 +1908,6 @@ int bullSignalSince = nz(ta.barssince(bullSignalRaw), 1000)
 int bearSignalSince = nz(ta.barssince(bearSignalRaw), 1000)
 int bullSweepSince = nz(ta.barssince(sweepLow), 1000)
 int bearSweepSince = nz(ta.barssince(sweepHigh), 1000)
-int bullRunOnLiquiditySince = nz(ta.barssince(bullRunOnLiquidity), 1000)
-int bearRunOnLiquiditySince = nz(ta.barssince(bearRunOnLiquidity), 1000)
-int bullSweepOfLiquiditySince = nz(ta.barssince(bullSweepOfLiquidity), 1000)
-int bearSweepOfLiquiditySince = nz(ta.barssince(bearSweepOfLiquidity), 1000)
-int bullReclaimAfterSweepSince = nz(ta.barssince(bullReclaimAfterSweep), 1000)
-int bearReclaimAfterSweepSince = nz(ta.barssince(bearReclaimAfterSweep), 1000)
-int bullAbsorptionAfterSweepSince = nz(ta.barssince(bullAbsorptionAfterSweep), 1000)
-int bearAbsorptionAfterSweepSince = nz(ta.barssince(bearAbsorptionAfterSweep), 1000)
 int bullConfirmSince = nz(ta.barssince(bullConfirmRaw), 1000)
 int bearConfirmSince = nz(ta.barssince(bearConfirmRaw), 1000)
 int bullFailureSince = nz(ta.barssince(bullFailureRaw), 1000)
@@ -2154,33 +2134,6 @@ bearBackgroundMemory := bearBackgroundMemoryState
 
 bool bullRollingBackgroundConflict = bullRollingBackgroundSupport <= -8.0
 bool bearRollingBackgroundConflict = bearRollingBackgroundSupport <= -8.0
-
-string bullBackgroundMemoryText = bullCorrectionDestructive ? "Bull context: destructive pullback risk" :
-     bullApproachExhausted ? "Bull context: move looks exhausted" :
-     backgroundWeaknessBull >= 65 ? "Bull bg under pressure" :
-     backgroundStrengthBull >= 65 ? "Bull strength in background" :
-     backgroundWeaknessBear >= 60 ? "Bear weakness in background" :
-     bullBackgroundSupport ? "Bull supportive background" :
-     bullBackgroundConflict ? "Bull trigger vs hostile bg" :
-     "Neutral background"
-
-string bearBackgroundMemoryText = bearCorrectionDestructive ? "Bear context: destructive pullback risk" :
-     bearApproachExhausted ? "Bear context: move looks exhausted" :
-     backgroundWeaknessBear >= 65 ? "Bear bg under pressure" :
-     backgroundStrengthBear >= 65 ? "Bear strength in background" :
-     backgroundWeaknessBull >= 60 ? "Bull weakness in background" :
-     bearBackgroundSupport ? "Bear supportive background" :
-     bearBackgroundConflict ? "Bear trigger vs hostile bg" :
-     "Neutral background"
-
-string bullTriggerQualityText = qualityBandText(bullTriggerQuality) + " " + strPct(bullTriggerQuality)
-string bearTriggerQualityText = qualityBandText(bearTriggerQuality) + " " + strPct(bearTriggerQuality)
-string bullSweepQualityText = qualityBandText(bullSweepQuality) + " " + strPct(bullSweepQuality)
-string bearSweepQualityText = qualityBandText(bearSweepQuality) + " " + strPct(bearSweepQuality)
-string bullPoolQualityText = qualityBandText(bullPoolQuality) + " " + strPct(bullPoolQuality)
-string bearPoolQualityText = qualityBandText(bearPoolQuality) + " " + strPct(bearPoolQuality)
-string bullMemoryQualityText = qualityBandText(bullBackgroundMemory) + " " + strPct(bullBackgroundMemory)
-string bearMemoryQualityText = qualityBandText(bearBackgroundMemory) + " " + strPct(bearBackgroundMemory)
 
 float bullTriggerQualityModifier = bullTriggerActive or recentBullSignal ? qualityToModifier(bullTriggerQuality, 55.0, 12.0, 3.0) : 0.0
 float bearTriggerQualityModifier = bearTriggerActive or recentBearSignal ? qualityToModifier(bearTriggerQuality, 55.0, 12.0, 3.0) : 0.0
@@ -3080,11 +3033,8 @@ lbTP2 := upsertLeftLabel(lbTP2, levelLabelsVisible, levelX2, posTP2, "TP2 TU", c
 var table statePanel = table.new(position.bottom_left, 2, 9, border_width=0)
 
 float biasSum = math.max(bullQuality + bearQuality, 0.0001)
-float impulseSum = math.max(bullImpulse + bearImpulse, 0.0001)
 int biasLongPct = int(math.round(100.0 * bullQuality / biasSum))
 int biasShortPct = 100 - biasLongPct
-int impulseLongPct = int(math.round(100.0 * bullImpulse / impulseSum))
-int impulseShortPct = 100 - impulseLongPct
 
 int uiFocusSide = decisionSide == "LONG" ? 1 : decisionSide == "SHORT" ? -1 : bullQuality >= bearQuality ? 1 : -1
 string uiFocusName = uiFocusSide == 1 ? "LONG" : "SHORT"
