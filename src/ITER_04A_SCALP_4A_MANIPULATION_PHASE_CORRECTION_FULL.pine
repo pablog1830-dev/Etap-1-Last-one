@@ -614,8 +614,6 @@ ltfPack() =>
     bool _bearTest = _bearTestPotential
     bool _bullNoSupply = _bullNoSupplyPotential
     bool _bearNoDemand = _bearNoDemandPotential
-    bool _bullEffortResult = _bullEffortResultPotential
-    bool _bearEffortResult = _bearEffortResultPotential
     bool _bullFailedTest = _bearTestFailed
     bool _bearFailedTest = _bullTestFailed
 
@@ -1019,17 +1017,11 @@ bool bearCascadeWeak = bearCascadeRecent and bearCascadeSeq >= 2
 bool bullCascadeStrong = bullCascadeRecent and ((bullCascadeSeq >= 3) or (bullCascadeSeq >= 2 and bullCascadeFast and close > nz(bullCascadeLastLvl, close)))
 bool bearCascadeStrong = bearCascadeRecent and ((bearCascadeSeq >= 3) or (bearCascadeSeq >= 2 and bearCascadeFast and close < nz(bearCascadeLastLvl, close)))
 
-string bullCascadeText = bullCascadeStrong ? "CASCADE UP STRONG" : bullCascadeWeak ? "CASCADE UP WEAK" : "Brak"
-string bearCascadeText = bearCascadeStrong ? "CASCADE DOWN STRONG" : bearCascadeWeak ? "CASCADE DOWN WEAK" : "Brak"
-
 float bullCascadeBoost = bullCascadeStrong ? 4.0 : bullCascadeWeak ? 1.75 : 0.0
 float bearCascadeBoost = bearCascadeStrong ? 4.0 : bearCascadeWeak ? 1.75 : 0.0
 
 float bullCascadePenalty = bearCascadeStrong ? -2.75 : bearCascadeWeak ? -1.25 : 0.0
 float bearCascadePenalty = bullCascadeStrong ? -2.75 : bullCascadeWeak ? -1.25 : 0.0
-
-string bullCascadeReason = bearCascadeStrong ? "Bear LQ cascade strongly pressures LONG side" : bearCascadeWeak ? "Bear LQ pressure builds against LONG side" : "Brak"
-string bearCascadeReason = bullCascadeStrong ? "Bull LQ cascade strongly pressures SHORT side" : bullCascadeWeak ? "Bull LQ pressure builds against SHORT side" : "Brak"
 
 // =====================================================
 // PRICE / VOLUME CONTEXT
@@ -1613,7 +1605,6 @@ bool bearConfirmBase = (bearTriggerConfirmedRaw or bearTriggerPotentialRaw[1] or
 bool bullConfirmRaw = bullConfirmBase and not bearFailureRaw
 bool bearConfirmRaw = bearConfirmBase and not bullFailureRaw
 
-string confirmText = bullConfirmRaw and not bearConfirmRaw ? "Bull confirm" : bearConfirmRaw and not bullConfirmRaw ? "Bear confirm" : "Brak"
 string failureText = bullFailureRaw and not bearFailureRaw ? "Bull failed" : bearFailureRaw and not bullFailureRaw ? "Bear failed" : "Brak"
 
 // =====================================================
@@ -1827,11 +1818,6 @@ float bearAccelBoost = bearAccelStrong ? 4.0 : bearAccelWeak ? 1.5 : 0.0
 float bullAccelPenalty = bearAccelStrong ? -3.0 : bearAccelWeak ? -1.25 : 0.0
 float bearAccelPenalty = bullAccelStrong ? -3.0 : bullAccelWeak ? -1.25 : 0.0
 
-string bullAccelReason = bearAccelStrong ? "Bear acceleration strongly pressures LONG side" : bearAccelWeak ? "Bear acceleration rises against LONG side" : "Brak"
-string bearAccelReason = bullAccelStrong ? "Bull acceleration strongly pressures SHORT side" : bullAccelWeak ? "Bull acceleration rises against SHORT side" : "Brak"
-
-string bullAccelText = bullAccelStrong ? "ACCELERATION UP STRONG" : bullAccelWeak ? "ACCELERATION UP WEAK" : "Brak"
-string bearAccelText = bearAccelStrong ? "ACCELERATION DOWN STRONG" : bearAccelWeak ? "ACCELERATION DOWN WEAK" : "Brak"
 
 // =====================================================
 // END OF IMPULSE / EXHAUSTION MODULE
@@ -1922,11 +1908,6 @@ float bearEndBoost = endUpStrong ? 3.25 : endUpWeak ? 1.25 : 0.0
 float bullEndPenalty = endUpStrong ? -3.0 : endUpWeak ? -1.25 : 0.0
 float bearEndPenalty = endDownStrong ? -3.0 : endDownWeak ? -1.25 : 0.0
 
-string endUpReason = endUpStrong ? "Distribution risk strongly pressures LONG continuation" : endUpWeak ? "Up impulse weakens" : "Brak"
-string endDownReason = endDownStrong ? "Accumulation risk strongly pressures SHORT continuation" : endDownWeak ? "Down impulse weakens" : "Brak"
-
-string endUpText = endUpStrong ? "END OF IMPULSE UP STRONG" : endUpWeak ? "END OF IMPULSE UP WEAK" : "Brak"
-string endDownText = endDownStrong ? "END OF IMPULSE DOWN STRONG" : endDownWeak ? "END OF IMPULSE DOWN WEAK" : "Brak"
 
 
 // =====================================================
@@ -2334,8 +2315,6 @@ string regimeText = bullContext > bearContext ? "Bull" : bearContext > bullConte
 // =====================================================
 // WATCH / SETUP / ENTRY
 // =====================================================
-bool bullAdvisoryStrongAgainst = bearCascadeStrong or bearAccelStrong or endUpStrong
-bool bearAdvisoryStrongAgainst = bullCascadeStrong or bullAccelStrong or endDownStrong
 bool bullAdvisoryWeakAgainst = bearCascadeWeak or bearAccelWeak or endUpWeak
 bool bearAdvisoryWeakAgainst = bullCascadeWeak or bullAccelWeak or endDownWeak
 
@@ -2486,17 +2465,11 @@ bool bearLocationExecutablePrimary = bearLocationExecutableRaw and (not dualExec
 bool bullLocationExecutableNow = bullLocationExecutablePrimary
 bool bearLocationExecutableNow = bearLocationExecutablePrimary
 
-string bullLocationStructuralText = locationStructuralText(selBullActive, selBullType, selBullNear, selBullFresh, selBullTouches, sweepLow, "sweep low")
-string bearLocationStructuralText = locationStructuralText(selBearActive, selBearType, selBearNear, selBearFresh, selBearTouches, sweepHigh, "sweep high")
-
 string bullLocationExecutableText = locationExecutableText(dualExecutableLocation, bullLocationExecutableRaw, bullLocationExecutablePrimary, selBullNear, "LONG", "sweep low")
 string bearLocationExecutableText = locationExecutableText(dualExecutableLocation, bearLocationExecutableRaw, bearLocationExecutablePrimary, selBearNear, "SHORT", "sweep high")
 
-string locationExecutableSummaryText = dualExecutableLocation ? (bullLocationDominant ? "RAW DUAL/CONFLICT | wykonawczo: LONG" : bearLocationDominant ? "RAW DUAL/CONFLICT | wykonawczo: SHORT" : "RAW DUAL/CONFLICT | brak priorytetu") : bullLocationExecutableRaw ? "LONG executable" : bearLocationExecutableRaw ? "SHORT executable" : "Brak executable location"
-
 string currentBullTriggerText = bullTriggerText
 string currentBearTriggerText = bearTriggerText
-string currentTfTriggerStatus = "L: " + currentBullTriggerText + " | S: " + currentBearTriggerText
 
 string bullStateSource = stateSourceText(execLabel, bullSetupLive, "LONG", bullSetupType, bullSetupReason, watchTrendLong, watchReactionLong, bullAccelStrong, "BULL ACCELERATION", bullCascadeStrong, "BULL CASCADE", endDownStrong, "END DOWN IMPULSE")
 string bearStateSource = stateSourceText(execLabel, bearSetupLive, "SHORT", bearSetupType, bearSetupReason, watchTrendShort, watchReactionShort, bearAccelStrong, "BEAR ACCELERATION", bearCascadeStrong, "BEAR CASCADE", endUpStrong, "END UP IMPULSE")
@@ -3170,14 +3143,12 @@ if selBullActive and zoneBottom(selBullTop, selBullBot) <= close
 // =====================================================
 var table dash = table.new(position.top_right, 2, 33, border_width=0)
 
-string positionText = posActive ? dirName(posDir) + " | " + posType : "FLAT"
 string bullZoneText = selBullActive ? zoneLabelText(true, selBullType, selBullFresh, selBullTouches) : "Brak"
 string bearZoneText = selBearActive ? zoneLabelText(false, selBearType, selBearFresh, selBearTouches) : "Brak"
 string killDashText = posActive ? killStatusText : lastKillNote
 string cascadeDashText = bullCascadeStrong ? "UP STRONG" : bullCascadeWeak ? "UP WEAK" : bearCascadeStrong ? "DOWN STRONG" : bearCascadeWeak ? "DOWN WEAK" : "Brak"
 string accelDashText = bullAccelStrong ? "UP STRONG" : bullAccelWeak ? "UP WEAK" : bearAccelStrong ? "DOWN STRONG" : bearAccelWeak ? "DOWN WEAK" : "Brak"
 string endImpulseDashText = endDownStrong ? "DOWN STRONG" : endDownWeak ? "DOWN WEAK" : endUpStrong ? "UP STRONG" : endUpWeak ? "UP WEAK" : "Brak"
-string triggerQualityDashText = "L " + bullTriggerQualityText + " | S " + bearTriggerQualityText
 
 string dashFocusTrigger = pickFocusString(uiFocusSide, currentBullTriggerText, currentBearTriggerText)
 string dashFocusZone = pickFocusString(uiFocusSide, bullZoneText, bearZoneText)
