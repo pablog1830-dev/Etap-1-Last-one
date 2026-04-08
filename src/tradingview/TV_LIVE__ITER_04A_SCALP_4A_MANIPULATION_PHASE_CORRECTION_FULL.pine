@@ -2424,59 +2424,14 @@ string bearLocationExecutableText = locationExecutableText(dualExecutableLocatio
 string currentBullTriggerText = bullTriggerText
 string currentBearTriggerText = bearTriggerText
 
-string bullStateSource = stateSourceText(execLabel, bullSetupLive, "LONG", bullSetupType, bullSetupReason, watchTrendLong, watchReactionLong, bullAccelStrong, "BULL ACCELERATION", bullCascadeStrong, "BULL CASCADE", endDownStrong, "END DOWN IMPULSE")
-string bearStateSource = stateSourceText(execLabel, bearSetupLive, "SHORT", bearSetupType, bearSetupReason, watchTrendShort, watchReactionShort, bearAccelStrong, "BEAR ACCELERATION", bearCascadeStrong, "BEAR CASCADE", endUpStrong, "END UP IMPULSE")
-
-
-string htfContextStatus = ""
 string ltfConfirmStatus = ""
-string bullLocalExecutionStatus = "Brak"
-string bearLocalExecutionStatus = "Brak"
-string localExecutionStatus = ""
 
 if execTf == "15"
-    htfContextStatus := "15m core | 60m " + biasTriText(ctx1Bull, ctx1Bear) + " | 240m " + biasTriText(ctx2Bull, ctx2Bear)
     ltfConfirmStatus := "5m " + deltaRoleText(ltf1Delta) + " | 1m assist " + deltaRoleText(ltf2Delta)
-
-    bullLocalExecutionStatus := not bullLocationExecutableNow ? "LONG poza local execution" :
-         ltfLongBlocked ? "LONG delegated LTF not supportive yet" :
-         ltfBullSoft ? "LONG delegated LTF ready" :
-         "LONG czeka na delegated LTF confirm"
-
-    bearLocalExecutionStatus := not bearLocationExecutableNow ? "SHORT poza local execution" :
-         ltfShortBlocked ? "SHORT delegated LTF not supportive yet" :
-         ltfBearSoft ? "SHORT delegated LTF ready" :
-         "SHORT czeka na delegated LTF confirm"
 else if execTf == "5"
-    htfContextStatus := "15m HTF " + biasTriText(ctx1Bull, ctx1Bear) + " | 60m bg " + biasTriText(ctx2Bull, ctx2Bear)
     ltfConfirmStatus := "1m " + deltaRoleText(ltf1Delta)
-
-    bullLocalExecutionStatus := not bullLocationExecutableNow ? "LONG poza local execution" :
-         ltfLongBlocked ? "LONG 1m not supportive yet" :
-         ltfBullSoft ? "LONG 1m ready" :
-         "LONG czeka na 1m confirm"
-
-    bearLocalExecutionStatus := not bearLocationExecutableNow ? "SHORT poza local execution" :
-         ltfShortBlocked ? "SHORT 1m not supportive yet" :
-         ltfBearSoft ? "SHORT 1m ready" :
-         "SHORT czeka na 1m confirm"
 else
-    htfContextStatus := "5m exec ctx " + biasTriText(ctx1Bull, ctx1Bear) + " | 15m bg " + biasTriText(ctx2Bull, ctx2Bear)
     ltfConfirmStatus := "N/A on 1m"
-
-    bullLocalExecutionStatus := not bullLocationExecutableNow ? "LONG poza local execution" :
-         bullFailureRaw ? "LONG local failure" :
-         bullConfirmRaw ? "LONG micro confirmed" :
-         bullMicroBreak ? "LONG micro break only" :
-         "LONG w lokalizacji bez confirm"
-
-    bearLocalExecutionStatus := not bearLocationExecutableNow ? "SHORT poza local execution" :
-         bearFailureRaw ? "SHORT local failure" :
-         bearConfirmRaw ? "SHORT micro confirmed" :
-         bearMicroBreak ? "SHORT micro break only" :
-         "SHORT w lokalizacji bez confirm"
-
-localExecutionStatus := "L: " + bullLocalExecutionStatus + " | S: " + bearLocalExecutionStatus
 
 // =====================================================
 // POSITION / LEVELS / MANAGEMENT
@@ -2489,14 +2444,11 @@ var float posEntry = na
 var float posSL = na
 var float posTP1 = na
 var float posTP2 = na
-var float posQ = na
-var float posI = na
 var float posRisk = na
 var int posBar = na
 var bool posTP1Hit = false
 var float posSetupRef = na
 var float posSLAnchor = na
-var string posEntryMode = ""
 var string lastResult = "Brak"
 var string lastKillNote = "Brak"
 
@@ -2508,12 +2460,9 @@ if newEntry
     posType := bullEntry ? bullSetupType : bearSetupType
     posReason := bullEntry ? bullSetupReason : bearSetupReason
     posEntry := close
-    posQ := bullEntry ? bullQuality : bearQuality
-    posI := bullEntry ? bullImpulse : bearImpulse
     posBar := bar_index
     posTP1Hit := false
     posSetupRef := bullEntry ? bullSetupRef : bearSetupRef
-    posEntryMode := bullEntry ? (bullSetupType == "REACTION LONG" ? "RECLAIM" : bullSetupType == "PRESSURE LONG" ? "PRESSURE_BREAK" : "TREND_BREAK") : (bearSetupType == "REACTION SHORT" ? "RECLAIM" : bearSetupType == "PRESSURE SHORT" ? "PRESSURE_BREAK" : "TREND_BREAK")
     lastKillNote := "Brak"
 
     if bullEntry
@@ -2704,22 +2653,6 @@ if posActive
 float bullPostEntryHealth = posActive and posDir == 1 ? clamp100(bullScenarioScore * 0.65 + (100.0 - bullScenarioFailureRisk) * 0.35) : na
 float bearPostEntryHealth = posActive and posDir == -1 ? clamp100(bearScenarioScore * 0.65 + (100.0 - bearScenarioFailureRisk) * 0.35) : na
 string scenarioPostEntryText = not posActive ? "Brak" : posDir == 1 ? "LONG health " + strPct(bullPostEntryHealth) + " | fail " + strPct(bullScenarioFailureRisk) : "SHORT health " + strPct(bearPostEntryHealth) + " | fail " + strPct(bearScenarioFailureRisk)
-
-string currentStateSource = "Brak"
-if posActive
-    currentStateSource := execLabel + " ACTIVE " + posType + " | " + posReason
-else if bullEntry
-    currentStateSource := execLabel + " ENTRY LONG | " + bullSetupType + " | " + bullSetupReason
-else if bearEntry
-    currentStateSource := execLabel + " ENTRY SHORT | " + bearSetupType + " | " + bearSetupReason
-else if bullSetupLive
-    currentStateSource := bullStateSource
-else if bearSetupLive
-    currentStateSource := bearStateSource
-else if watchTrendLong or watchReactionLong or bullAccelStrong or bullCascadeStrong or endDownStrong
-    currentStateSource := bullStateSource
-else if watchTrendShort or watchReactionShort or bearAccelStrong or bearCascadeStrong or endUpStrong
-    currentStateSource := bearStateSource
 
 // =====================================================
 // STATE / REASON
