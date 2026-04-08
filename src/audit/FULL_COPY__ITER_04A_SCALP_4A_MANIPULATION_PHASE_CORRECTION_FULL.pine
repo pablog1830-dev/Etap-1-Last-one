@@ -117,20 +117,6 @@ scoreToInt(float x) =>
 strPct(float x) =>
     str.tostring(scoreToInt(x)) + "%"
 
-fmt(float x) =>
-    str.tostring(x, format.mintick)
-
-strSigned(float x) =>
-    float y = math.round(x * 10.0) / 10.0
-    (y > 0 ? "+" : "") + str.tostring(y)
-
-boolYN(bool x) =>
-    x ? "TAK" : "NIE"
-
-dirName(int d) =>
-    d == 1 ? "LONG" : d == -1 ? "SHORT" : "NONE"
-
-
 // --- Helper domain: price levels / zone geometry ---
 zoneTouched(float zTop, float zBot) =>
     not na(zTop) and not na(zBot) and low <= math.max(zTop, zBot) and high >= math.min(zTop, zBot)
@@ -174,7 +160,7 @@ levelExists(array<float> arr, float lvl, float tol) =>
     found
 
 
-// --- Helper domain: UI text mapping (status labels) ---
+// --- Helper domain: UI text mapping (state / reason / blocker / dashboard) ---
 lqUpperText(int st) =>
     st == 0 ? "U-LQ fresh" : "U-LQ swept"
 
@@ -204,14 +190,6 @@ deltaRoleText(float d) =>
 reasonFinal(string msg) =>
     "Final decision: " + msg
 
-locationStructuralText(bool active, string zoneType, bool nearZone, bool fresh, int touches, bool sweepNow, string sweepLabel) =>
-    string txt = "Brak"
-    if active
-        txt := zoneType + " | " + (nearZone ? "Near" : "Stored") + " | " + (fresh ? "Fresh" : "Retest x" + str.tostring(touches)) + (sweepNow ? " | " + sweepLabel : "")
-    else if sweepNow
-        txt := sweepLabel + " bez aktywnej strefy"
-    txt
-
 locationExecutableText(bool dualExec, bool execRaw, bool execPrimary, bool nearZone, string sideName, string sweepLabel) =>
     string txt = "NIE | poza lokalizacja " + sideName + " teraz"
     if dualExec
@@ -240,15 +218,6 @@ scenarioStateReasonText(string scenarioState, bool failureRaw, bool manipulation
      scenarioState == "SOFT_DETERIORATION" ? sideName + " follow-through quality is weakening" :
      scenarioState == "WARNING" ? (manipulationRisk ? sideName + " scenario under warning: manipulation sweep active, reclaim/absorption still missing" : correctionDestructive ? sideName + " scenario under warning: destructive pullback in rolling background" : approachExhausted ? sideName + " scenario under warning: approach/exhaustion in rolling background" : sideName + " scenario under warning pressure") :
      sideName + " scenario stable / normal noise"
-
-stateSourceText(string execLbl, bool setupLive, string setupSide, string setupType, string setupReason, bool watchTrend, bool watchReaction, bool accelStrong, string accelText, bool cascadeStrong, string cascadeText, bool impulseStrong, string impulseText) =>
-    setupLive ? execLbl + " SETUP " + setupSide + " | " + setupType + " | " + setupReason :
-     watchTrend ? execLbl + " WATCH " + setupSide + " | TREND" :
-     watchReaction ? execLbl + " WATCH " + setupSide + " | REACTION" :
-     accelStrong ? execLbl + " STRUCTURE | " + accelText :
-     cascadeStrong ? execLbl + " STRUCTURE | " + cascadeText :
-     impulseStrong ? execLbl + " STRUCTURE | " + impulseText :
-     "Brak"
 
 pickSideString(string side, string longVal, string shortVal, string noneVal) =>
     side == "LONG" ? longVal : side == "SHORT" ? shortVal : noneVal
@@ -372,22 +341,6 @@ deleteLabelRef(label _lb) =>
     if not na(_lb)
         label.delete(_lb)
 
-deleteBoxRef(box _bx) =>
-    if not na(_bx)
-        box.delete(_bx)
-
-deleteLineArray(array<line> _arr) =>
-    if array.size(_arr) > 0
-        for i = 0 to array.size(_arr) - 1
-            deleteLineRef(array.get(_arr, i))
-    array.clear(_arr)
-
-deleteLabelArray(array<label> _arr) =>
-    if array.size(_arr) > 0
-        for i = 0 to array.size(_arr) - 1
-            deleteLabelRef(array.get(_arr, i))
-    array.clear(_arr)
-
 upsertHLine(line _ln, bool _visible, int _x1, int _x2, float _y, color _lineColor, _lineStyle, int _lineWidth) =>
     line _out = _ln
     if not _visible or na(_y)
@@ -479,9 +432,6 @@ segmentPctFromFlow(bool _trendOk, float _dirVol, float _oppVol, float _dirRange,
     _pct += _noAccept ? 8 : 0
     _pct += _effortResult ? 8 : 0
     clamp100(_pct)
-
-boundedScore(float x, float lo, float hi) =>
-    hi <= lo ? 0.0 : clamp100((x - lo) / (hi - lo) * 100.0)
 
 // --- Helper domain: fib technical helpers ---
 fibRetraceLevelBull(float _low, float _high, float _ratio) =>
@@ -643,8 +593,6 @@ ltfPack() =>
     bool _bearTest = _bearTestPotential
     bool _bullNoSupply = _bullNoSupplyPotential
     bool _bearNoDemand = _bearNoDemandPotential
-    bool _bullEffortResult = _bullEffortResultPotential
-    bool _bearEffortResult = _bearEffortResultPotential
     bool _bullFailedTest = _bearTestFailed
     bool _bearFailedTest = _bullTestFailed
 
@@ -699,7 +647,6 @@ bearPulseFromPack(bool _trend, bool _reaction, bool _cont, bool _oppFail, bool _
 string execTf = profile == "Chart TF" ? timeframe.period : profile == "1m" ? "1" : profile == "5m" ? "5" : "15"
 bool tfSupported = timeframe.period == "1" or timeframe.period == "5" or timeframe.period == "15"
 bool tfOk = execTf == timeframe.period and tfSupported
-string execLabel = execTf + "m"
 
 string ctx1Tf = execTf == "1" ? "5" : execTf == "5" ? "15" : "60"
 string ctx2Tf = execTf == "1" ? "15" : execTf == "5" ? "60" : "240"
@@ -1048,17 +995,11 @@ bool bearCascadeWeak = bearCascadeRecent and bearCascadeSeq >= 2
 bool bullCascadeStrong = bullCascadeRecent and ((bullCascadeSeq >= 3) or (bullCascadeSeq >= 2 and bullCascadeFast and close > nz(bullCascadeLastLvl, close)))
 bool bearCascadeStrong = bearCascadeRecent and ((bearCascadeSeq >= 3) or (bearCascadeSeq >= 2 and bearCascadeFast and close < nz(bearCascadeLastLvl, close)))
 
-string bullCascadeText = bullCascadeStrong ? "CASCADE UP STRONG" : bullCascadeWeak ? "CASCADE UP WEAK" : "Brak"
-string bearCascadeText = bearCascadeStrong ? "CASCADE DOWN STRONG" : bearCascadeWeak ? "CASCADE DOWN WEAK" : "Brak"
-
 float bullCascadeBoost = bullCascadeStrong ? 4.0 : bullCascadeWeak ? 1.75 : 0.0
 float bearCascadeBoost = bearCascadeStrong ? 4.0 : bearCascadeWeak ? 1.75 : 0.0
 
 float bullCascadePenalty = bearCascadeStrong ? -2.75 : bearCascadeWeak ? -1.25 : 0.0
 float bearCascadePenalty = bullCascadeStrong ? -2.75 : bullCascadeWeak ? -1.25 : 0.0
-
-string bullCascadeReason = bearCascadeStrong ? "Bear LQ cascade strongly pressures LONG side" : bearCascadeWeak ? "Bear LQ pressure builds against LONG side" : "Brak"
-string bearCascadeReason = bullCascadeStrong ? "Bull LQ cascade strongly pressures SHORT side" : bullCascadeWeak ? "Bull LQ pressure builds against SHORT side" : "Brak"
 
 // =====================================================
 // PRICE / VOLUME CONTEXT
@@ -1627,8 +1568,9 @@ float bullFibInvalidation = bullFibConfluence ? bullFibClosestLvl : na
 float bearFibInvalidation = bearFibConfluence ? bearFibClosestLvl : na
 
 // =====================================================
-// FAILURE / CONFIRMATION
+// FAILURE / CONFIRMATION (LOCAL VSA + ZONE INTEGRITY)
 // =====================================================
+// ETAP-1 marker: future survival module can hook post-failure diagnostics here (no runtime logic in this pass).
 bool bullFailureBase = bullTestFailed or bullNoSupplyFailed or bullEffortResultFailed or ((bullStoppingPotential[1] or bullShakeout[1] or bullAbsorb[1] or bull2BR[1] or bullNoAcceptLower[1]) and close < low[1])
 bool bearFailureBase = bearTestFailed or bearNoDemandFailed or bearEffortResultFailed or ((bearStoppingPotential[1] or bearUpthrust[1] or bearAbsorb[1] or bear2BR[1] or bearNoAcceptUpper[1]) and close > high[1])
 
@@ -1641,12 +1583,12 @@ bool bearConfirmBase = (bearTriggerConfirmedRaw or bearTriggerPotentialRaw[1] or
 bool bullConfirmRaw = bullConfirmBase and not bearFailureRaw
 bool bearConfirmRaw = bearConfirmBase and not bullFailureRaw
 
-string confirmText = bullConfirmRaw and not bearConfirmRaw ? "Bull confirm" : bearConfirmRaw and not bullConfirmRaw ? "Bear confirm" : "Brak"
 string failureText = bullFailureRaw and not bearFailureRaw ? "Bull failed" : bearFailureRaw and not bullFailureRaw ? "Bear failed" : "Brak"
 
 // =====================================================
-// DECISION CORE: CONTEXT -> LOCATION -> TRIGGER -> CONFIRM
+// DECISION CORE (CONTEXT -> LOCATION -> TRIGGER -> CONFIRM)
 // =====================================================
+// ETAP-1 marker: future liquidity-event gate can be attached after location scoring, before trigger aggregation.
 float bullContext = 0.0
 bullContext += emaFast > emaSlow ? 10 : 0
 bullContext += bullSegPct > bearSegPct + 6 ? 8 : bullSegPct > bearSegPct ? 5 : 0
@@ -1717,7 +1659,7 @@ float baseBullQuality = clamp100(bullBaseScore)
 float baseBearQuality = clamp100(bearBaseScore)
 
 // =====================================================
-// SCENARIO WEAKENING / CONTROL TRANSITION MODULE
+// QUALITY LAYER: SCENARIO WEAKENING / CONTROL TRANSITION
 // =====================================================
 bool bullLeadBase = baseBullQuality > baseBearQuality + math.max(minSideGap - 1, 2) or (bullContinuationRaw and not bearContinuationRaw) or (recentBullSignal and not recentBearSignal)
 bool bearLeadBase = baseBearQuality > baseBullQuality + math.max(minSideGap - 1, 2) or (bearContinuationRaw and not bullContinuationRaw) or (recentBearSignal and not recentBullSignal)
@@ -1854,11 +1796,6 @@ float bearAccelBoost = bearAccelStrong ? 4.0 : bearAccelWeak ? 1.5 : 0.0
 float bullAccelPenalty = bearAccelStrong ? -3.0 : bearAccelWeak ? -1.25 : 0.0
 float bearAccelPenalty = bullAccelStrong ? -3.0 : bullAccelWeak ? -1.25 : 0.0
 
-string bullAccelReason = bearAccelStrong ? "Bear acceleration strongly pressures LONG side" : bearAccelWeak ? "Bear acceleration rises against LONG side" : "Brak"
-string bearAccelReason = bullAccelStrong ? "Bull acceleration strongly pressures SHORT side" : bullAccelWeak ? "Bull acceleration rises against SHORT side" : "Brak"
-
-string bullAccelText = bullAccelStrong ? "ACCELERATION UP STRONG" : bullAccelWeak ? "ACCELERATION UP WEAK" : "Brak"
-string bearAccelText = bearAccelStrong ? "ACCELERATION DOWN STRONG" : bearAccelWeak ? "ACCELERATION DOWN WEAK" : "Brak"
 
 // =====================================================
 // END OF IMPULSE / EXHAUSTION MODULE
@@ -1949,11 +1886,6 @@ float bearEndBoost = endUpStrong ? 3.25 : endUpWeak ? 1.25 : 0.0
 float bullEndPenalty = endUpStrong ? -3.0 : endUpWeak ? -1.25 : 0.0
 float bearEndPenalty = endDownStrong ? -3.0 : endDownWeak ? -1.25 : 0.0
 
-string endUpReason = endUpStrong ? "Distribution risk strongly pressures LONG continuation" : endUpWeak ? "Up impulse weakens" : "Brak"
-string endDownReason = endDownStrong ? "Accumulation risk strongly pressures SHORT continuation" : endDownWeak ? "Down impulse weakens" : "Brak"
-
-string endUpText = endUpStrong ? "END OF IMPULSE UP STRONG" : endUpWeak ? "END OF IMPULSE UP WEAK" : "Brak"
-string endDownText = endDownStrong ? "END OF IMPULSE DOWN STRONG" : endDownWeak ? "END OF IMPULSE DOWN WEAK" : "Brak"
 
 
 // =====================================================
@@ -1966,14 +1898,6 @@ int bullSignalSince = nz(ta.barssince(bullSignalRaw), 1000)
 int bearSignalSince = nz(ta.barssince(bearSignalRaw), 1000)
 int bullSweepSince = nz(ta.barssince(sweepLow), 1000)
 int bearSweepSince = nz(ta.barssince(sweepHigh), 1000)
-int bullRunOnLiquiditySince = nz(ta.barssince(bullRunOnLiquidity), 1000)
-int bearRunOnLiquiditySince = nz(ta.barssince(bearRunOnLiquidity), 1000)
-int bullSweepOfLiquiditySince = nz(ta.barssince(bullSweepOfLiquidity), 1000)
-int bearSweepOfLiquiditySince = nz(ta.barssince(bearSweepOfLiquidity), 1000)
-int bullReclaimAfterSweepSince = nz(ta.barssince(bullReclaimAfterSweep), 1000)
-int bearReclaimAfterSweepSince = nz(ta.barssince(bearReclaimAfterSweep), 1000)
-int bullAbsorptionAfterSweepSince = nz(ta.barssince(bullAbsorptionAfterSweep), 1000)
-int bearAbsorptionAfterSweepSince = nz(ta.barssince(bearAbsorptionAfterSweep), 1000)
 int bullConfirmSince = nz(ta.barssince(bullConfirmRaw), 1000)
 int bearConfirmSince = nz(ta.barssince(bearConfirmRaw), 1000)
 int bullFailureSince = nz(ta.barssince(bullFailureRaw), 1000)
@@ -2201,33 +2125,6 @@ bearBackgroundMemory := bearBackgroundMemoryState
 bool bullRollingBackgroundConflict = bullRollingBackgroundSupport <= -8.0
 bool bearRollingBackgroundConflict = bearRollingBackgroundSupport <= -8.0
 
-string bullBackgroundMemoryText = bullCorrectionDestructive ? "Bull context: destructive pullback risk" :
-     bullApproachExhausted ? "Bull context: move looks exhausted" :
-     backgroundWeaknessBull >= 65 ? "Bull bg under pressure" :
-     backgroundStrengthBull >= 65 ? "Bull strength in background" :
-     backgroundWeaknessBear >= 60 ? "Bear weakness in background" :
-     bullBackgroundSupport ? "Bull supportive background" :
-     bullBackgroundConflict ? "Bull trigger vs hostile bg" :
-     "Neutral background"
-
-string bearBackgroundMemoryText = bearCorrectionDestructive ? "Bear context: destructive pullback risk" :
-     bearApproachExhausted ? "Bear context: move looks exhausted" :
-     backgroundWeaknessBear >= 65 ? "Bear bg under pressure" :
-     backgroundStrengthBear >= 65 ? "Bear strength in background" :
-     backgroundWeaknessBull >= 60 ? "Bull weakness in background" :
-     bearBackgroundSupport ? "Bear supportive background" :
-     bearBackgroundConflict ? "Bear trigger vs hostile bg" :
-     "Neutral background"
-
-string bullTriggerQualityText = qualityBandText(bullTriggerQuality) + " " + strPct(bullTriggerQuality)
-string bearTriggerQualityText = qualityBandText(bearTriggerQuality) + " " + strPct(bearTriggerQuality)
-string bullSweepQualityText = qualityBandText(bullSweepQuality) + " " + strPct(bullSweepQuality)
-string bearSweepQualityText = qualityBandText(bearSweepQuality) + " " + strPct(bearSweepQuality)
-string bullPoolQualityText = qualityBandText(bullPoolQuality) + " " + strPct(bullPoolQuality)
-string bearPoolQualityText = qualityBandText(bearPoolQuality) + " " + strPct(bearPoolQuality)
-string bullMemoryQualityText = qualityBandText(bullBackgroundMemory) + " " + strPct(bullBackgroundMemory)
-string bearMemoryQualityText = qualityBandText(bearBackgroundMemory) + " " + strPct(bearBackgroundMemory)
-
 float bullTriggerQualityModifier = bullTriggerActive or recentBullSignal ? qualityToModifier(bullTriggerQuality, 55.0, 12.0, 3.0) : 0.0
 float bearTriggerQualityModifier = bearTriggerActive or recentBearSignal ? qualityToModifier(bearTriggerQuality, 55.0, 12.0, 3.0) : 0.0
 float bullSweepQualityModifier = bullSweepRecent ? qualityToModifier(bullSweepQuality, 50.0, 14.0, 2.5) : 0.0
@@ -2361,8 +2258,6 @@ string regimeText = bullContext > bearContext ? "Bull" : bearContext > bullConte
 // =====================================================
 // WATCH / SETUP / ENTRY
 // =====================================================
-bool bullAdvisoryStrongAgainst = bearCascadeStrong or bearAccelStrong or endUpStrong
-bool bearAdvisoryStrongAgainst = bullCascadeStrong or bullAccelStrong or endDownStrong
 bool bullAdvisoryWeakAgainst = bearCascadeWeak or bearAccelWeak or endUpWeak
 bool bearAdvisoryWeakAgainst = bullCascadeWeak or bullAccelWeak or endDownWeak
 
@@ -2513,71 +2408,20 @@ bool bearLocationExecutablePrimary = bearLocationExecutableRaw and (not dualExec
 bool bullLocationExecutableNow = bullLocationExecutablePrimary
 bool bearLocationExecutableNow = bearLocationExecutablePrimary
 
-string bullLocationStructuralText = locationStructuralText(selBullActive, selBullType, selBullNear, selBullFresh, selBullTouches, sweepLow, "sweep low")
-string bearLocationStructuralText = locationStructuralText(selBearActive, selBearType, selBearNear, selBearFresh, selBearTouches, sweepHigh, "sweep high")
-
 string bullLocationExecutableText = locationExecutableText(dualExecutableLocation, bullLocationExecutableRaw, bullLocationExecutablePrimary, selBullNear, "LONG", "sweep low")
 string bearLocationExecutableText = locationExecutableText(dualExecutableLocation, bearLocationExecutableRaw, bearLocationExecutablePrimary, selBearNear, "SHORT", "sweep high")
 
-string locationExecutableSummaryText = dualExecutableLocation ? (bullLocationDominant ? "RAW DUAL/CONFLICT | wykonawczo: LONG" : bearLocationDominant ? "RAW DUAL/CONFLICT | wykonawczo: SHORT" : "RAW DUAL/CONFLICT | brak priorytetu") : bullLocationExecutableRaw ? "LONG executable" : bearLocationExecutableRaw ? "SHORT executable" : "Brak executable location"
-
 string currentBullTriggerText = bullTriggerText
 string currentBearTriggerText = bearTriggerText
-string currentTfTriggerStatus = "L: " + currentBullTriggerText + " | S: " + currentBearTriggerText
 
-string bullStateSource = stateSourceText(execLabel, bullSetupLive, "LONG", bullSetupType, bullSetupReason, watchTrendLong, watchReactionLong, bullAccelStrong, "BULL ACCELERATION", bullCascadeStrong, "BULL CASCADE", endDownStrong, "END DOWN IMPULSE")
-string bearStateSource = stateSourceText(execLabel, bearSetupLive, "SHORT", bearSetupType, bearSetupReason, watchTrendShort, watchReactionShort, bearAccelStrong, "BEAR ACCELERATION", bearCascadeStrong, "BEAR CASCADE", endUpStrong, "END UP IMPULSE")
-
-
-string htfContextStatus = ""
 string ltfConfirmStatus = ""
-string bullLocalExecutionStatus = "Brak"
-string bearLocalExecutionStatus = "Brak"
-string localExecutionStatus = ""
 
 if execTf == "15"
-    htfContextStatus := "15m core | 60m " + biasTriText(ctx1Bull, ctx1Bear) + " | 240m " + biasTriText(ctx2Bull, ctx2Bear)
     ltfConfirmStatus := "5m " + deltaRoleText(ltf1Delta) + " | 1m assist " + deltaRoleText(ltf2Delta)
-
-    bullLocalExecutionStatus := not bullLocationExecutableNow ? "LONG poza local execution" :
-         ltfLongBlocked ? "LONG delegated LTF not supportive yet" :
-         ltfBullSoft ? "LONG delegated LTF ready" :
-         "LONG czeka na delegated LTF confirm"
-
-    bearLocalExecutionStatus := not bearLocationExecutableNow ? "SHORT poza local execution" :
-         ltfShortBlocked ? "SHORT delegated LTF not supportive yet" :
-         ltfBearSoft ? "SHORT delegated LTF ready" :
-         "SHORT czeka na delegated LTF confirm"
 else if execTf == "5"
-    htfContextStatus := "15m HTF " + biasTriText(ctx1Bull, ctx1Bear) + " | 60m bg " + biasTriText(ctx2Bull, ctx2Bear)
     ltfConfirmStatus := "1m " + deltaRoleText(ltf1Delta)
-
-    bullLocalExecutionStatus := not bullLocationExecutableNow ? "LONG poza local execution" :
-         ltfLongBlocked ? "LONG 1m not supportive yet" :
-         ltfBullSoft ? "LONG 1m ready" :
-         "LONG czeka na 1m confirm"
-
-    bearLocalExecutionStatus := not bearLocationExecutableNow ? "SHORT poza local execution" :
-         ltfShortBlocked ? "SHORT 1m not supportive yet" :
-         ltfBearSoft ? "SHORT 1m ready" :
-         "SHORT czeka na 1m confirm"
 else
-    htfContextStatus := "5m exec ctx " + biasTriText(ctx1Bull, ctx1Bear) + " | 15m bg " + biasTriText(ctx2Bull, ctx2Bear)
     ltfConfirmStatus := "N/A on 1m"
-
-    bullLocalExecutionStatus := not bullLocationExecutableNow ? "LONG poza local execution" :
-         bullFailureRaw ? "LONG local failure" :
-         bullConfirmRaw ? "LONG micro confirmed" :
-         bullMicroBreak ? "LONG micro break only" :
-         "LONG w lokalizacji bez confirm"
-
-    bearLocalExecutionStatus := not bearLocationExecutableNow ? "SHORT poza local execution" :
-         bearFailureRaw ? "SHORT local failure" :
-         bearConfirmRaw ? "SHORT micro confirmed" :
-         bearMicroBreak ? "SHORT micro break only" :
-         "SHORT w lokalizacji bez confirm"
-
-localExecutionStatus := "L: " + bullLocalExecutionStatus + " | S: " + bearLocalExecutionStatus
 
 // =====================================================
 // POSITION / LEVELS / MANAGEMENT
@@ -2590,14 +2434,11 @@ var float posEntry = na
 var float posSL = na
 var float posTP1 = na
 var float posTP2 = na
-var float posQ = na
-var float posI = na
 var float posRisk = na
 var int posBar = na
 var bool posTP1Hit = false
 var float posSetupRef = na
 var float posSLAnchor = na
-var string posEntryMode = ""
 var string lastResult = "Brak"
 var string lastKillNote = "Brak"
 
@@ -2609,12 +2450,9 @@ if newEntry
     posType := bullEntry ? bullSetupType : bearSetupType
     posReason := bullEntry ? bullSetupReason : bearSetupReason
     posEntry := close
-    posQ := bullEntry ? bullQuality : bearQuality
-    posI := bullEntry ? bullImpulse : bearImpulse
     posBar := bar_index
     posTP1Hit := false
     posSetupRef := bullEntry ? bullSetupRef : bearSetupRef
-    posEntryMode := bullEntry ? (bullSetupType == "REACTION LONG" ? "RECLAIM" : bullSetupType == "PRESSURE LONG" ? "PRESSURE_BREAK" : "TREND_BREAK") : (bearSetupType == "REACTION SHORT" ? "RECLAIM" : bearSetupType == "PRESSURE SHORT" ? "PRESSURE_BREAK" : "TREND_BREAK")
     lastKillNote := "Brak"
 
     if bullEntry
@@ -2806,22 +2644,6 @@ float bullPostEntryHealth = posActive and posDir == 1 ? clamp100(bullScenarioSco
 float bearPostEntryHealth = posActive and posDir == -1 ? clamp100(bearScenarioScore * 0.65 + (100.0 - bearScenarioFailureRisk) * 0.35) : na
 string scenarioPostEntryText = not posActive ? "Brak" : posDir == 1 ? "LONG health " + strPct(bullPostEntryHealth) + " | fail " + strPct(bullScenarioFailureRisk) : "SHORT health " + strPct(bearPostEntryHealth) + " | fail " + strPct(bearScenarioFailureRisk)
 
-string currentStateSource = "Brak"
-if posActive
-    currentStateSource := execLabel + " ACTIVE " + posType + " | " + posReason
-else if bullEntry
-    currentStateSource := execLabel + " ENTRY LONG | " + bullSetupType + " | " + bullSetupReason
-else if bearEntry
-    currentStateSource := execLabel + " ENTRY SHORT | " + bearSetupType + " | " + bearSetupReason
-else if bullSetupLive
-    currentStateSource := bullStateSource
-else if bearSetupLive
-    currentStateSource := bearStateSource
-else if watchTrendLong or watchReactionLong or bullAccelStrong or bullCascadeStrong or endDownStrong
-    currentStateSource := bullStateSource
-else if watchTrendShort or watchReactionShort or bearAccelStrong or bearCascadeStrong or endUpStrong
-    currentStateSource := bearStateSource
-
 // =====================================================
 // STATE / REASON
 // =====================================================
@@ -2846,12 +2668,13 @@ else if hasShortDecisionProcess and not hasLongDecisionProcess
 else if hasLongDecisionProcess and hasShortDecisionProcess
     decisionSide := bullQuality > bearQuality ? "LONG" : bearQuality > bullQuality ? "SHORT" : "NONE"
 
-// SCALP-2: explicit scenario-state engine (VALID -> WARNING -> SOFT_DETERIORATION -> FRAGILE -> SOFT_BLOCK -> HARD_INVALIDATION -> KILL_EXIT)
+// ETAP-1: scenario-state engine ordering (VALID -> WARNING -> SOFT_DETERIORATION -> FRAGILE -> SOFT_BLOCK -> HARD_INVALIDATION -> KILL_EXIT)
 string bullScenarioQuality = "WARNING"
 string bearScenarioQuality = "WARNING"
 string bullScenarioQualityReason = "LONG quality not strong enough"
 string bearScenarioQualityReason = "SHORT quality not strong enough"
 
+// --- Scenario quality classification (separation-only: no execution mutation) ---
 bool bullScenarioQualityValid = tfOk and not bullFailureRaw and (bullSetupLive or watchTrendLong or watchReactionLong or (bullQuality >= watchQ and bullContext >= 10 and bullTrigger >= setupTriggerMinLocal and not bullSetupOppositionHard))
 bool bearScenarioQualityValid = tfOk and not bearFailureRaw and (bearSetupLive or watchTrendShort or watchReactionShort or (bearQuality >= watchQ and bearContext >= 10 and bearTrigger >= setupTriggerMinLocal and not bearSetupOppositionHard))
 
@@ -2889,9 +2712,11 @@ bool bearExecutionGateBase = tfOk and bearLocationExecutableNow and not bearEntr
 bool bullExecutionPermissionNow = bullScenarioQuality != "HARD_INVALIDATION" and bullExecutionGateBase
 bool bearExecutionPermissionNow = bearScenarioQuality != "HARD_INVALIDATION" and bearExecutionGateBase
 
+// ETAP-1 marker: future post-liquidity response can be injected as an additional explanation layer before execution reason text.
 string bullExecutionPermissionReason = scenarioExecutionReason(bullExecutionPermissionNow, tfOk, bullScenarioQuality, bullLocationExecutableNow, ltfLongBlocked, bullEntryAdvisoryHardBlock, bullManipulationRisk, bullConfirmRaw or bullMicroBreak, bullTriggerActive or bullSetupLive, "LONG")
 string bearExecutionPermissionReason = scenarioExecutionReason(bearExecutionPermissionNow, tfOk, bearScenarioQuality, bearLocationExecutableNow, ltfShortBlocked, bearEntryAdvisoryHardBlock, bearManipulationRisk, bearConfirmRaw or bearMicroBreak, bearTriggerActive or bearSetupLive, "SHORT")
 
+// --- Survival state classification (separation-only from decision scoring) ---
 bool bullSurvivalHardInvalidation = bullFailureRaw or (posActive and posDir == 1 and ksHardLong)
 bool bearSurvivalHardInvalidation = bearFailureRaw or (posActive and posDir == -1 and ksHardShort)
 
@@ -2936,7 +2761,9 @@ string scenarioStateText = "ST:" + scenarioSurvivalText + " | Q:" + scenarioQual
 string scenarioManipulationReason = pickSideString(scenarioSide, bullManipulationText, bearManipulationText, "No manipulation side")
 string scenarioStatePreText = pickSideString(scenarioSide, bullScenarioStatePreManagement, bearScenarioStatePreManagement, "WARNING")
 string scenarioStateReason = composeScenarioReasonText(scenarioSurvivalReason, scenarioQualityReason, executionPermissionReason, scenarioStatePreText, marketRegimeState, scenarioManipulationReason)
+// ETAP-1 marker: future probabilistic layer should consume scenarioStateText/reason as read-only inputs.
 
+// --- Execution blockers (descriptive layer bound to existing execution gates) ---
 bullEntryBlocker := not tfOk ? "Nieprawidlowy TF uruchomienia" :
      entryConflict ? "Konflikt LONG/SHORT" :
      bullFailureRaw ? "Bull failure blocks LONG" :
@@ -2992,6 +2819,7 @@ else
     entryBlocker := "Brak strony decyzyjnej"
 
 bool killWarnActive = posActive and (ksWarnLong or ksWarnShort)
+// --- Final state / reason projection (observability follows execution result) ---
 stateText := posActive ? (killWarnActive ? "ACTIVE " + posType + " | EXIT RISK" : "ACTIVE " + posType) :
      bullEntry ? "ENTRY " + bullSetupType :
      bearEntry ? "ENTRY " + bearSetupType :
@@ -3128,11 +2956,8 @@ lbTP2 := upsertLeftLabel(lbTP2, levelLabelsVisible, levelX2, posTP2, "TP2 TU", c
 var table statePanel = table.new(position.bottom_left, 2, 9, border_width=0)
 
 float biasSum = math.max(bullQuality + bearQuality, 0.0001)
-float impulseSum = math.max(bullImpulse + bearImpulse, 0.0001)
 int biasLongPct = int(math.round(100.0 * bullQuality / biasSum))
 int biasShortPct = 100 - biasLongPct
-int impulseLongPct = int(math.round(100.0 * bullImpulse / impulseSum))
-int impulseShortPct = 100 - impulseLongPct
 
 int uiFocusSide = decisionSide == "LONG" ? 1 : decisionSide == "SHORT" ? -1 : bullQuality >= bearQuality ? 1 : -1
 string uiFocusName = uiFocusSide == 1 ? "LONG" : "SHORT"
@@ -3191,14 +3016,12 @@ if selBullActive and zoneBottom(selBullTop, selBullBot) <= close
 // =====================================================
 var table dash = table.new(position.top_right, 2, 33, border_width=0)
 
-string positionText = posActive ? dirName(posDir) + " | " + posType : "FLAT"
 string bullZoneText = selBullActive ? zoneLabelText(true, selBullType, selBullFresh, selBullTouches) : "Brak"
 string bearZoneText = selBearActive ? zoneLabelText(false, selBearType, selBearFresh, selBearTouches) : "Brak"
 string killDashText = posActive ? killStatusText : lastKillNote
 string cascadeDashText = bullCascadeStrong ? "UP STRONG" : bullCascadeWeak ? "UP WEAK" : bearCascadeStrong ? "DOWN STRONG" : bearCascadeWeak ? "DOWN WEAK" : "Brak"
 string accelDashText = bullAccelStrong ? "UP STRONG" : bullAccelWeak ? "UP WEAK" : bearAccelStrong ? "DOWN STRONG" : bearAccelWeak ? "DOWN WEAK" : "Brak"
 string endImpulseDashText = endDownStrong ? "DOWN STRONG" : endDownWeak ? "DOWN WEAK" : endUpStrong ? "UP STRONG" : endUpWeak ? "UP WEAK" : "Brak"
-string triggerQualityDashText = "L " + bullTriggerQualityText + " | S " + bearTriggerQualityText
 
 string dashFocusTrigger = pickFocusString(uiFocusSide, currentBullTriggerText, currentBearTriggerText)
 string dashFocusZone = pickFocusString(uiFocusSide, bullZoneText, bearZoneText)
