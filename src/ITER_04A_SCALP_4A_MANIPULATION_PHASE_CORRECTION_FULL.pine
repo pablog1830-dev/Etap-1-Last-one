@@ -117,16 +117,6 @@ scoreToInt(float x) =>
 strPct(float x) =>
     str.tostring(scoreToInt(x)) + "%"
 
-fmt(float x) =>
-    str.tostring(x, format.mintick)
-
-strSigned(float x) =>
-    float y = math.round(x * 10.0) / 10.0
-    (y > 0 ? "+" : "") + str.tostring(y)
-
-boolYN(bool x) =>
-    x ? "TAK" : "NIE"
-
 dirName(int d) =>
     d == 1 ? "LONG" : d == -1 ? "SHORT" : "NONE"
 
@@ -174,7 +164,7 @@ levelExists(array<float> arr, float lvl, float tol) =>
     found
 
 
-// --- Helper domain: UI text mapping (status labels) ---
+// --- Helper domain: UI text mapping (state / reason / blocker / dashboard) ---
 lqUpperText(int st) =>
     st == 0 ? "U-LQ fresh" : "U-LQ swept"
 
@@ -372,22 +362,6 @@ deleteLabelRef(label _lb) =>
     if not na(_lb)
         label.delete(_lb)
 
-deleteBoxRef(box _bx) =>
-    if not na(_bx)
-        box.delete(_bx)
-
-deleteLineArray(array<line> _arr) =>
-    if array.size(_arr) > 0
-        for i = 0 to array.size(_arr) - 1
-            deleteLineRef(array.get(_arr, i))
-    array.clear(_arr)
-
-deleteLabelArray(array<label> _arr) =>
-    if array.size(_arr) > 0
-        for i = 0 to array.size(_arr) - 1
-            deleteLabelRef(array.get(_arr, i))
-    array.clear(_arr)
-
 upsertHLine(line _ln, bool _visible, int _x1, int _x2, float _y, color _lineColor, _lineStyle, int _lineWidth) =>
     line _out = _ln
     if not _visible or na(_y)
@@ -479,9 +453,6 @@ segmentPctFromFlow(bool _trendOk, float _dirVol, float _oppVol, float _dirRange,
     _pct += _noAccept ? 8 : 0
     _pct += _effortResult ? 8 : 0
     clamp100(_pct)
-
-boundedScore(float x, float lo, float hi) =>
-    hi <= lo ? 0.0 : clamp100((x - lo) / (hi - lo) * 100.0)
 
 // --- Helper domain: fib technical helpers ---
 fibRetraceLevelBull(float _low, float _high, float _ratio) =>
@@ -1627,8 +1598,9 @@ float bullFibInvalidation = bullFibConfluence ? bullFibClosestLvl : na
 float bearFibInvalidation = bearFibConfluence ? bearFibClosestLvl : na
 
 // =====================================================
-// FAILURE / CONFIRMATION
+// FAILURE / CONFIRMATION (LOCAL VSA + ZONE INTEGRITY)
 // =====================================================
+// ETAP-1 marker: future survival module can hook post-failure diagnostics here (no runtime logic in this pass).
 bool bullFailureBase = bullTestFailed or bullNoSupplyFailed or bullEffortResultFailed or ((bullStoppingPotential[1] or bullShakeout[1] or bullAbsorb[1] or bull2BR[1] or bullNoAcceptLower[1]) and close < low[1])
 bool bearFailureBase = bearTestFailed or bearNoDemandFailed or bearEffortResultFailed or ((bearStoppingPotential[1] or bearUpthrust[1] or bearAbsorb[1] or bear2BR[1] or bearNoAcceptUpper[1]) and close > high[1])
 
@@ -1645,8 +1617,9 @@ string confirmText = bullConfirmRaw and not bearConfirmRaw ? "Bull confirm" : be
 string failureText = bullFailureRaw and not bearFailureRaw ? "Bull failed" : bearFailureRaw and not bullFailureRaw ? "Bear failed" : "Brak"
 
 // =====================================================
-// DECISION CORE: CONTEXT -> LOCATION -> TRIGGER -> CONFIRM
+// DECISION CORE (CONTEXT -> LOCATION -> TRIGGER -> CONFIRM)
 // =====================================================
+// ETAP-1 marker: future liquidity-event gate can be attached after location scoring, before trigger aggregation.
 float bullContext = 0.0
 bullContext += emaFast > emaSlow ? 10 : 0
 bullContext += bullSegPct > bearSegPct + 6 ? 8 : bullSegPct > bearSegPct ? 5 : 0
@@ -1717,7 +1690,7 @@ float baseBullQuality = clamp100(bullBaseScore)
 float baseBearQuality = clamp100(bearBaseScore)
 
 // =====================================================
-// SCENARIO WEAKENING / CONTROL TRANSITION MODULE
+// QUALITY LAYER: SCENARIO WEAKENING / CONTROL TRANSITION
 // =====================================================
 bool bullLeadBase = baseBullQuality > baseBearQuality + math.max(minSideGap - 1, 2) or (bullContinuationRaw and not bearContinuationRaw) or (recentBullSignal and not recentBearSignal)
 bool bearLeadBase = baseBearQuality > baseBullQuality + math.max(minSideGap - 1, 2) or (bearContinuationRaw and not bullContinuationRaw) or (recentBearSignal and not recentBullSignal)
@@ -2846,12 +2819,13 @@ else if hasShortDecisionProcess and not hasLongDecisionProcess
 else if hasLongDecisionProcess and hasShortDecisionProcess
     decisionSide := bullQuality > bearQuality ? "LONG" : bearQuality > bullQuality ? "SHORT" : "NONE"
 
-// SCALP-2: explicit scenario-state engine (VALID -> WARNING -> SOFT_DETERIORATION -> FRAGILE -> SOFT_BLOCK -> HARD_INVALIDATION -> KILL_EXIT)
+// ETAP-1: scenario-state engine ordering (VALID -> WARNING -> SOFT_DETERIORATION -> FRAGILE -> SOFT_BLOCK -> HARD_INVALIDATION -> KILL_EXIT)
 string bullScenarioQuality = "WARNING"
 string bearScenarioQuality = "WARNING"
 string bullScenarioQualityReason = "LONG quality not strong enough"
 string bearScenarioQualityReason = "SHORT quality not strong enough"
 
+// --- Scenario quality classification (separation-only: no execution mutation) ---
 bool bullScenarioQualityValid = tfOk and not bullFailureRaw and (bullSetupLive or watchTrendLong or watchReactionLong or (bullQuality >= watchQ and bullContext >= 10 and bullTrigger >= setupTriggerMinLocal and not bullSetupOppositionHard))
 bool bearScenarioQualityValid = tfOk and not bearFailureRaw and (bearSetupLive or watchTrendShort or watchReactionShort or (bearQuality >= watchQ and bearContext >= 10 and bearTrigger >= setupTriggerMinLocal and not bearSetupOppositionHard))
 
@@ -2889,9 +2863,11 @@ bool bearExecutionGateBase = tfOk and bearLocationExecutableNow and not bearEntr
 bool bullExecutionPermissionNow = bullScenarioQuality != "HARD_INVALIDATION" and bullExecutionGateBase
 bool bearExecutionPermissionNow = bearScenarioQuality != "HARD_INVALIDATION" and bearExecutionGateBase
 
+// ETAP-1 marker: future post-liquidity response can be injected as an additional explanation layer before execution reason text.
 string bullExecutionPermissionReason = scenarioExecutionReason(bullExecutionPermissionNow, tfOk, bullScenarioQuality, bullLocationExecutableNow, ltfLongBlocked, bullEntryAdvisoryHardBlock, bullManipulationRisk, bullConfirmRaw or bullMicroBreak, bullTriggerActive or bullSetupLive, "LONG")
 string bearExecutionPermissionReason = scenarioExecutionReason(bearExecutionPermissionNow, tfOk, bearScenarioQuality, bearLocationExecutableNow, ltfShortBlocked, bearEntryAdvisoryHardBlock, bearManipulationRisk, bearConfirmRaw or bearMicroBreak, bearTriggerActive or bearSetupLive, "SHORT")
 
+// --- Survival state classification (separation-only from decision scoring) ---
 bool bullSurvivalHardInvalidation = bullFailureRaw or (posActive and posDir == 1 and ksHardLong)
 bool bearSurvivalHardInvalidation = bearFailureRaw or (posActive and posDir == -1 and ksHardShort)
 
@@ -2936,7 +2912,9 @@ string scenarioStateText = "ST:" + scenarioSurvivalText + " | Q:" + scenarioQual
 string scenarioManipulationReason = pickSideString(scenarioSide, bullManipulationText, bearManipulationText, "No manipulation side")
 string scenarioStatePreText = pickSideString(scenarioSide, bullScenarioStatePreManagement, bearScenarioStatePreManagement, "WARNING")
 string scenarioStateReason = composeScenarioReasonText(scenarioSurvivalReason, scenarioQualityReason, executionPermissionReason, scenarioStatePreText, marketRegimeState, scenarioManipulationReason)
+// ETAP-1 marker: future probabilistic layer should consume scenarioStateText/reason as read-only inputs.
 
+// --- Execution blockers (descriptive layer bound to existing execution gates) ---
 bullEntryBlocker := not tfOk ? "Nieprawidlowy TF uruchomienia" :
      entryConflict ? "Konflikt LONG/SHORT" :
      bullFailureRaw ? "Bull failure blocks LONG" :
@@ -2992,6 +2970,7 @@ else
     entryBlocker := "Brak strony decyzyjnej"
 
 bool killWarnActive = posActive and (ksWarnLong or ksWarnShort)
+// --- Final state / reason projection (observability follows execution result) ---
 stateText := posActive ? (killWarnActive ? "ACTIVE " + posType + " | EXIT RISK" : "ACTIVE " + posType) :
      bullEntry ? "ENTRY " + bullSetupType :
      bearEntry ? "ENTRY " + bearSetupType :
