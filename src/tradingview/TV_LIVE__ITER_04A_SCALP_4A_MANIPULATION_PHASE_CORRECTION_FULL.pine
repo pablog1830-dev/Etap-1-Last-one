@@ -2514,6 +2514,33 @@ else
     ltfConfirmStatus := "N/A on 1m"
 
 // =====================================================
+// QUALITY DECOMPOSITION (2A v1.1)
+// =====================================================
+bool e2a_focus_long = bullQuality >= bearQuality
+float thesis_quality = clamp0_100(e2a_focus_long ? bullQuality : bearQuality)
+float location_quality = clamp0_100((e2a_focus_long ? bullLocationStructuralScore : bearLocationStructuralScore) * 6.0 + ((e2a_focus_long ? bullLocationExecutableRaw : bearLocationExecutableRaw) ? 20.0 : 0.0))
+float execution_quality = clamp0_100((e2a_focus_long ? bullTriggerQuality : bearTriggerQuality) * 0.55 + (e2a_focus_long ? bullImpulse : bearImpulse) * 0.45)
+
+// =====================================================
+// BASIC_LIQUIDITY_STATE (2A v1.1)
+// =====================================================
+bool e2a_hard_structural_invalidation = e2a_focus_long ? bullFailureRaw : bearFailureRaw
+bool e2a_reclaim_pending = e2a_focus_long ? (sweepLow and not bullReclaimAfterSweep) : (sweepHigh and not bearReclaimAfterSweep)
+bool e2a_sweep_context = e2a_focus_long ? (sweepLow or bullSweepRecent) : (sweepHigh or bearSweepRecent)
+basicLiquidityState basic_liquidity_state = e2a_hard_structural_invalidation ? basicLiquidityState.hard_invalidation : e2a_reclaim_pending ? basicLiquidityState.reclaim_needed : e2a_sweep_context ? basicLiquidityState.sweep_context : basicLiquidityState.none
+
+// =====================================================
+// SETUP_QUALITY (2A v1.1)
+// =====================================================
+float penalties_total = 0.0
+penalties_total += degraded_mode_state == degradedModeState.reduced_confidence ? 10.0 : 0.0
+penalties_total += partial_history_flag ? 12.0 : 0.0
+penalties_total += gap_flag ? 8.0 : 0.0
+penalties_total += basic_liquidity_state == basicLiquidityState.sweep_context ? 8.0 : 0.0
+penalties_total := math.min(penalties_total, 26.0)
+float setup_quality = math.max(0.0, math.min(thesis_quality, location_quality, execution_quality) - penalties_total)
+
+// =====================================================
 // POSITION / LEVELS / MANAGEMENT
 // =====================================================
 var bool posActive = false
