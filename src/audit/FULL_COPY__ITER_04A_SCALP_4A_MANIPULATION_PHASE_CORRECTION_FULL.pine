@@ -232,6 +232,20 @@ scenarioExecutionReason(bool canExec, bool tfAllowed, string scenarioQuality, bo
      manipulationRisk ? sideName + " blocked: manipulation sweep without strict reclaim/absorption yet" :
      sideName + " execution not open now"
 
+executor2aGateTag(bool tfAllowed, string scenarioQuality, bool hasExecLocation, bool advisoryHardBlock, bool hasConfirm, bool hasTrigger, bool ltfBlocked, bool manipulationRisk) =>
+    not tfAllowed ? "TF_BLOCK" :
+     scenarioQuality == "HARD_INVALIDATION" ? "HARD_INVALIDATION" :
+     not hasExecLocation ? "LOCATION_BLOCK" :
+     advisoryHardBlock ? "ADVISORY_HARD_BLOCK" :
+     not hasConfirm ? "CONFIRM_MISSING" :
+     not hasTrigger ? "TRIGGER_MISSING" :
+     ltfBlocked ? "LTF_BLOCK" :
+     manipulationRisk ? "MANIPULATION_BLOCK" :
+     "EXECUTOR_READY"
+
+executor2aPermit(string gateTag) =>
+    gateTag == "EXECUTOR_READY"
+
 scenarioStateReasonText(string scenarioState, bool failureRaw, bool manipulationRisk, bool correctionDestructive, bool approachExhausted, string sideName, string failureTag) =>
     scenarioState == "KILL_EXIT" ? sideName + " active position hit valid kill condition" :
      scenarioState == "HARD_INVALIDATION" ? (failureRaw ? failureTag + " failure structurally killed " + sideName + " scenario" : sideName + " thesis structurally invalidated") :
@@ -2883,14 +2897,22 @@ else if bearWarning or bearAdvisoryWeakAgainst
     bearScenarioQuality := "WARNING"
     bearScenarioQualityReason := "SHORT thesis has growing opposing pressure"
 
-bool bullExecutionGateBase = tfOk and bullLocationExecutableNow and not bullEntryAdvisoryHardBlock and (bullConfirmRaw or bullMicroBreak) and (bullTriggerActive or bullSetupLive)
-bool bearExecutionGateBase = tfOk and bearLocationExecutableNow and not bearEntryAdvisoryHardBlock and (bearConfirmRaw or bearMicroBreak) and (bearTriggerActive or bearSetupLive)
+bool bullExecutionHasConfirm = bullConfirmRaw or bullMicroBreak
+bool bearExecutionHasConfirm = bearConfirmRaw or bearMicroBreak
+bool bullExecutionHasTrigger = bullTriggerActive or bullSetupLive
+bool bearExecutionHasTrigger = bearTriggerActive or bearSetupLive
 
-bool bullExecutionPermissionNow = bullScenarioQuality != "HARD_INVALIDATION" and bullExecutionGateBase
-bool bearExecutionPermissionNow = bearScenarioQuality != "HARD_INVALIDATION" and bearExecutionGateBase
+bool bullExecutionGateBase = tfOk and bullLocationExecutableNow and not bullEntryAdvisoryHardBlock and bullExecutionHasConfirm and bullExecutionHasTrigger
+bool bearExecutionGateBase = tfOk and bearLocationExecutableNow and not bearEntryAdvisoryHardBlock and bearExecutionHasConfirm and bearExecutionHasTrigger
 
-string bullExecutionPermissionReason = scenarioExecutionReason(bullExecutionPermissionNow, tfOk, bullScenarioQuality, bullLocationExecutableNow, ltfLongBlocked, bullEntryAdvisoryHardBlock, bullManipulationRisk, bullConfirmRaw or bullMicroBreak, bullTriggerActive or bullSetupLive, "LONG")
-string bearExecutionPermissionReason = scenarioExecutionReason(bearExecutionPermissionNow, tfOk, bearScenarioQuality, bearLocationExecutableNow, ltfShortBlocked, bearEntryAdvisoryHardBlock, bearManipulationRisk, bearConfirmRaw or bearMicroBreak, bearTriggerActive or bearSetupLive, "SHORT")
+string bullExecutor2aGateTag = executor2aGateTag(tfOk, bullScenarioQuality, bullLocationExecutableNow, bullEntryAdvisoryHardBlock, bullExecutionHasConfirm, bullExecutionHasTrigger, ltfLongBlocked, bullManipulationRisk)
+string bearExecutor2aGateTag = executor2aGateTag(tfOk, bearScenarioQuality, bearLocationExecutableNow, bearEntryAdvisoryHardBlock, bearExecutionHasConfirm, bearExecutionHasTrigger, ltfShortBlocked, bearManipulationRisk)
+
+bool bullExecutionPermissionNow = executor2aPermit(bullExecutor2aGateTag)
+bool bearExecutionPermissionNow = executor2aPermit(bearExecutor2aGateTag)
+
+string bullExecutionPermissionReason = scenarioExecutionReason(bullExecutionPermissionNow, tfOk, bullScenarioQuality, bullLocationExecutableNow, ltfLongBlocked, bullEntryAdvisoryHardBlock, bullManipulationRisk, bullExecutionHasConfirm, bullExecutionHasTrigger, "LONG")
+string bearExecutionPermissionReason = scenarioExecutionReason(bearExecutionPermissionNow, tfOk, bearScenarioQuality, bearLocationExecutableNow, ltfShortBlocked, bearEntryAdvisoryHardBlock, bearManipulationRisk, bearExecutionHasConfirm, bearExecutionHasTrigger, "SHORT")
 
 bool bullSurvivalHardInvalidation = bullFailureRaw or (posActive and posDir == 1 and ksHardLong)
 bool bearSurvivalHardInvalidation = bearFailureRaw or (posActive and posDir == -1 and ksHardShort)
@@ -2904,8 +2926,8 @@ bool bearScenarioSoftDeterioration = bearScenarioQuality == "VALID" and ((bearWa
 bool bullScenarioFragile = bullScenarioQuality == "VALID" and ((bullSetupTerminalLost and bullSurvivalWarningPressure) or (posActive and posDir == 1 and ksWarnLong) or (not bullExecutionGateBase and bullWarning and bullAdvisoryWeakAgainst and bullSetupTerminalLost))
 bool bearScenarioFragile = bearScenarioQuality == "VALID" and ((bearSetupTerminalLost and bearSurvivalWarningPressure) or (posActive and posDir == -1 and ksWarnShort) or (not bearExecutionGateBase and bearWarning and bearAdvisoryWeakAgainst and bearSetupTerminalLost))
 
-bool bullOrdinaryExecutionWaiting = bullScenarioQuality != "HARD_INVALIDATION" and not bullExecutionPermissionNow and (not bullLocationExecutableNow or not (bullConfirmRaw or bullMicroBreak) or not (bullTriggerActive or bullSetupLive))
-bool bearOrdinaryExecutionWaiting = bearScenarioQuality != "HARD_INVALIDATION" and not bearExecutionPermissionNow and (not bearLocationExecutableNow or not (bearConfirmRaw or bearMicroBreak) or not (bearTriggerActive or bearSetupLive))
+bool bullOrdinaryExecutionWaiting = bullScenarioQuality != "HARD_INVALIDATION" and not bullExecutionPermissionNow and (not bullLocationExecutableNow or not bullExecutionHasConfirm or not bullExecutionHasTrigger)
+bool bearOrdinaryExecutionWaiting = bearScenarioQuality != "HARD_INVALIDATION" and not bearExecutionPermissionNow and (not bearLocationExecutableNow or not bearExecutionHasConfirm or not bearExecutionHasTrigger)
 
 bool bullSoftBlockOpposition = ltfLongBlocked or bullEntryAdvisoryHardBlock
 bool bearSoftBlockOpposition = ltfShortBlocked or bearEntryAdvisoryHardBlock
