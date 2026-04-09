@@ -37,6 +37,76 @@ tempoMinR           = input.float(0.35, "Min ruch po wejściu do utrzymania (R)"
 trailLen            = input.int(3, "Dlugosc traila strukturalnego", minval=2, maxval=10)
 
 // =====================================================
+// 2A CONSTANTS / ENUMS
+// =====================================================
+const string E2A_PROFILE_BTC = "BTCUSDT"
+const string E2A_PROFILE_ETH = "ETHUSDT"
+const string E2A_MARKET_SPOT = "spot"
+const string E2A_MARKET_LINEAR = "linear"
+const string E2A_TF_CONTEXT = "15"
+const string E2A_TF_STRUCTURE = "5"
+const string E2A_TF_EXECUTION = "1"
+const int E2A_MIN_HISTORY_BARS = 300
+
+enum decisionAction
+    ENTER_NOW
+    DELAY
+    WAIT_RECLAIM
+    CANCEL
+
+enum postEntryState
+    HOLD
+    WARNING
+    KILL_EXIT
+
+enum entryMode
+    aggressive
+    standard
+    reclaim
+    disabled
+
+enum basicLiquidityState
+    hard_invalidation
+    reclaim_needed
+    sweep_context
+    none
+
+enum degradedModeState
+    none
+    reduced_confidence
+    signal_suppression
+
+enum market_tag_simple
+    trend_like
+    range_like
+    unstable
+
+enum topReasonCode
+    THESIS_STRONG
+    LOCATION_GOOD
+    EXECUTION_CLEAN
+    SWEEP_SUPPORTIVE
+    RECLAIM_CONFIRMED
+
+enum topFailureCode
+    DATA_DEGRADED
+    LTF_WEAK
+    FOLLOWTHROUGH_LOST
+    HARD_INVALIDATION
+    RECLAIM_MISSING
+    EXPIRY_REACHED
+
+// =====================================================
+// 2A INPUT SPLIT
+// =====================================================
+grp2AExecution      = "2A v1.1 — Execution Split"
+market_profile      = input.string(E2A_PROFILE_BTC, "2A market_profile", options=[E2A_PROFILE_BTC, E2A_PROFILE_ETH], group=grp2AExecution)
+market_type         = input.string(E2A_MARKET_LINEAR, "2A market_type", options=[E2A_MARKET_SPOT, E2A_MARKET_LINEAR], group=grp2AExecution)
+context_tf          = input.string(E2A_TF_CONTEXT, "2A context_tf", options=[E2A_TF_CONTEXT], group=grp2AExecution)
+structure_tf        = input.string(E2A_TF_STRUCTURE, "2A structure_tf", options=[E2A_TF_STRUCTURE], group=grp2AExecution)
+execution_tf        = input.string(E2A_TF_EXECUTION, "2A execution_tf", options=[E2A_TF_EXECUTION], group=grp2AExecution)
+
+// =====================================================
 // EXPERT PARAMS — VSA CORE
 // =====================================================
 grpVsaBars          = "Expert VSA — Bar / Close"
@@ -111,6 +181,9 @@ bool isMinimal = viewMode == "Minimal"
 clamp100(float x) =>
     math.max(0.0, math.min(100.0, x))
 
+clamp0_100(float x) =>
+    math.max(0.0, math.min(100.0, x))
+
 scoreToInt(float x) =>
     int(math.round(clamp100(x)))
 
@@ -148,6 +221,23 @@ feedContext() =>
      syminfo.type == "crypto" ? "Crypto proxy" :
      syminfo.type == "stock" ? "Stock" :
      syminfo.type
+
+tfToSeconds(string tf) =>
+    tf == "1" ? 60 :
+     tf == "5" ? 300 :
+     tf == "15" ? 900 :
+     60
+
+// =====================================================
+// DATA_INTEGRITY_MINI (2A v1.1)
+// =====================================================
+int _e2aExecTfSec = tfToSeconds(execution_tf)
+int _deltaSec = na(time[1]) ? _e2aExecTfSec : int((time - time[1]) / 1000)
+bool gap_flag = not na(time[1]) and _deltaSec > _e2aExecTfSec * 2
+bool partial_history_flag = bar_index < E2A_MIN_HISTORY_BARS
+bool bar_alignment_ok = timeframe.isminutes and timeframe.multiplier == _e2aExecTfSec / 60 and context_tf == E2A_TF_CONTEXT and structure_tf == E2A_TF_STRUCTURE and execution_tf == E2A_TF_EXECUTION
+degradedModeState degraded_mode_state = not bar_alignment_ok ? degradedModeState.signal_suppression : (gap_flag or partial_history_flag ? degradedModeState.reduced_confidence : degradedModeState.none)
+float data_quality_score = clamp0_100(100.0 - (bar_alignment_ok ? 0.0 : 45.0) - (gap_flag ? 30.0 : 0.0) - (partial_history_flag ? 20.0 : 0.0))
 
 
 // --- Helper domain: collections / level de-duplication ---
