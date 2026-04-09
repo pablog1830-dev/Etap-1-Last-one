@@ -37,6 +37,76 @@ tempoMinR           = input.float(0.35, "Min ruch po wejściu do utrzymania (R)"
 trailLen            = input.int(3, "Dlugosc traila strukturalnego", minval=2, maxval=10)
 
 // =====================================================
+// 2A CONSTANTS / ENUMS
+// =====================================================
+const string E2A_PROFILE_BTC = "BTCUSDT"
+const string E2A_PROFILE_ETH = "ETHUSDT"
+const string E2A_MARKET_SPOT = "spot"
+const string E2A_MARKET_LINEAR = "linear"
+const string E2A_TF_CONTEXT = "15"
+const string E2A_TF_STRUCTURE = "5"
+const string E2A_TF_EXECUTION = "1"
+const int E2A_MIN_HISTORY_BARS = 300
+
+enum decisionAction
+    ENTER_NOW
+    DELAY
+    WAIT_RECLAIM
+    CANCEL
+
+enum postEntryState
+    HOLD
+    WARNING
+    KILL_EXIT
+
+enum entryMode
+    aggressive
+    standard
+    reclaim
+    disabled
+
+enum basicLiquidityState
+    hard_invalidation
+    reclaim_needed
+    sweep_context
+    none
+
+enum degradedModeState
+    none
+    reduced_confidence
+    signal_suppression
+
+enum market_tag_simple
+    trend_like
+    range_like
+    unstable
+
+enum topReasonCode
+    THESIS_STRONG
+    LOCATION_GOOD
+    EXECUTION_CLEAN
+    SWEEP_SUPPORTIVE
+    RECLAIM_CONFIRMED
+
+enum topFailureCode
+    DATA_DEGRADED
+    LTF_WEAK
+    FOLLOWTHROUGH_LOST
+    HARD_INVALIDATION
+    RECLAIM_MISSING
+    EXPIRY_REACHED
+
+// =====================================================
+// 2A INPUT SPLIT
+// =====================================================
+grp2AExecution      = "2A v1.1 — Execution Split"
+market_profile      = input.string(E2A_PROFILE_BTC, "2A market_profile", options=[E2A_PROFILE_BTC, E2A_PROFILE_ETH], group=grp2AExecution)
+market_type         = input.string(E2A_MARKET_LINEAR, "2A market_type", options=[E2A_MARKET_SPOT, E2A_MARKET_LINEAR], group=grp2AExecution)
+context_tf          = input.string(E2A_TF_CONTEXT, "2A context_tf", options=[E2A_TF_CONTEXT], group=grp2AExecution)
+structure_tf        = input.string(E2A_TF_STRUCTURE, "2A structure_tf", options=[E2A_TF_STRUCTURE], group=grp2AExecution)
+execution_tf        = input.string(E2A_TF_EXECUTION, "2A execution_tf", options=[E2A_TF_EXECUTION], group=grp2AExecution)
+
+// =====================================================
 // EXPERT PARAMS — VSA CORE
 // =====================================================
 grpVsaBars          = "Expert VSA — Bar / Close"
@@ -111,6 +181,9 @@ bool isMinimal = viewMode == "Minimal"
 clamp100(float x) =>
     math.max(0.0, math.min(100.0, x))
 
+clamp0_100(float x) =>
+    math.max(0.0, math.min(100.0, x))
+
 scoreToInt(float x) =>
     int(math.round(clamp100(x)))
 
@@ -148,6 +221,23 @@ feedContext() =>
      syminfo.type == "crypto" ? "Crypto proxy" :
      syminfo.type == "stock" ? "Stock" :
      syminfo.type
+
+tfToSeconds(string tf) =>
+    tf == "1" ? 60 :
+     tf == "5" ? 300 :
+     tf == "15" ? 900 :
+     60
+
+// =====================================================
+// DATA_INTEGRITY_MINI (2A v1.1)
+// =====================================================
+int _e2aExecTfSec = tfToSeconds(execution_tf)
+int _deltaSec = na(time[1]) ? _e2aExecTfSec : int((time - time[1]) / 1000)
+bool gap_flag = not na(time[1]) and _deltaSec > _e2aExecTfSec * 2
+bool partial_history_flag = bar_index < E2A_MIN_HISTORY_BARS
+bool bar_alignment_ok = timeframe.isminutes and timeframe.multiplier == _e2aExecTfSec / 60 and context_tf == E2A_TF_CONTEXT and structure_tf == E2A_TF_STRUCTURE and execution_tf == E2A_TF_EXECUTION
+degradedModeState degraded_mode_state = not bar_alignment_ok ? degradedModeState.signal_suppression : (gap_flag or partial_history_flag ? degradedModeState.reduced_confidence : degradedModeState.none)
+float data_quality_score = clamp0_100(100.0 - (bar_alignment_ok ? 0.0 : 45.0) - (gap_flag ? 30.0 : 0.0) - (partial_history_flag ? 20.0 : 0.0))
 
 
 // --- Helper domain: collections / level de-duplication ---
@@ -2422,6 +2512,126 @@ else if execTf == "5"
     ltfConfirmStatus := "1m " + deltaRoleText(ltf1Delta)
 else
     ltfConfirmStatus := "N/A on 1m"
+
+// =====================================================
+// QUALITY DECOMPOSITION (2A v1.1)
+// =====================================================
+bool e2a_focus_long = bullQuality >= bearQuality
+float thesis_quality = clamp0_100(e2a_focus_long ? bullQuality : bearQuality)
+float location_quality = clamp0_100((e2a_focus_long ? bullLocationStructuralScore : bearLocationStructuralScore) * 6.0 + ((e2a_focus_long ? bullLocationExecutableRaw : bearLocationExecutableRaw) ? 20.0 : 0.0))
+float execution_quality = clamp0_100((e2a_focus_long ? bullTriggerQuality : bearTriggerQuality) * 0.55 + (e2a_focus_long ? bullImpulse : bearImpulse) * 0.45)
+
+// =====================================================
+// BASIC_LIQUIDITY_STATE (2A v1.1)
+// =====================================================
+bool e2a_hard_structural_invalidation = e2a_focus_long ? bullFailureRaw : bearFailureRaw
+bool e2a_reclaim_pending = e2a_focus_long ? (sweepLow and not bullReclaimAfterSweep) : (sweepHigh and not bearReclaimAfterSweep)
+bool e2a_sweep_context = e2a_focus_long ? (sweepLow or bullSweepRecent) : (sweepHigh or bearSweepRecent)
+basicLiquidityState basic_liquidity_state = e2a_hard_structural_invalidation ? basicLiquidityState.hard_invalidation : e2a_reclaim_pending ? basicLiquidityState.reclaim_needed : e2a_sweep_context ? basicLiquidityState.sweep_context : basicLiquidityState.none
+
+// =====================================================
+// SETUP_QUALITY (2A v1.1)
+// =====================================================
+float penalties_total = 0.0
+penalties_total += degraded_mode_state == degradedModeState.reduced_confidence ? 10.0 : 0.0
+penalties_total += partial_history_flag ? 12.0 : 0.0
+penalties_total += gap_flag ? 8.0 : 0.0
+penalties_total += basic_liquidity_state == basicLiquidityState.sweep_context ? 8.0 : 0.0
+penalties_total := math.min(penalties_total, 26.0)
+float setup_quality = math.max(0.0, math.min(thesis_quality, location_quality, execution_quality) - penalties_total)
+
+// =====================================================
+// ENTRY_MODE_RESOLVER (2A v1.1)
+// =====================================================
+bool is_btc_profile = market_profile == E2A_PROFILE_BTC
+float min_thesis_quality = is_btc_profile ? 62.0 : 62.0
+float min_location_quality = is_btc_profile ? 58.0 : 60.0
+float min_execution_quality = is_btc_profile ? 58.0 : 60.0
+float min_setup_quality = is_btc_profile ? 55.0 : 54.0
+float aggressive_min_thesis = is_btc_profile ? 75.0 : 76.0
+float aggressive_min_location = is_btc_profile ? 70.0 : 72.0
+float aggressive_min_execution = is_btc_profile ? 68.0 : 70.0
+float aggressive_min_setup = is_btc_profile ? 60.0 : 62.0
+float reclaim_min_thesis = 60.0
+float reclaim_min_location = is_btc_profile ? 60.0 : 61.0
+float reclaim_min_execution = is_btc_profile ? 58.0 : 60.0
+float reclaim_min_setup = is_btc_profile ? 54.0 : 52.0
+float standard_penalty_limit = 16.0
+int wait_reclaim_max_bars = 3
+int expired_setup_window_bars = 3
+float penalty_cap_profile = is_btc_profile ? 26.0 : 28.0
+penalties_total := math.min(penalties_total, penalty_cap_profile)
+
+string _ticker_upper = str.upper(syminfo.ticker)
+bool profile_disallows_entry = (market_profile == E2A_PROFILE_BTC and not str.contains(_ticker_upper, "BTCUSDT")) or (market_profile == E2A_PROFILE_ETH and not str.contains(_ticker_upper, "ETHUSDT"))
+bool hard_structural_invalidation = e2a_hard_structural_invalidation
+bool no_valid_sl_tp_geometry = e2a_focus_long ? (na(bullSetupRef) or (na(lastSwingLow) and not selBullActive)) : (na(bearSetupRef) or (na(lastSwingHigh) and not selBearActive))
+bool expired_setup_window = e2a_focus_long ? (bullSetupLive and not na(bullSetupBar) and bar_index - bullSetupBar > expired_setup_window_bars) : (bearSetupLive and not na(bearSetupBar) and bar_index - bearSetupBar > expired_setup_window_bars)
+bool signal_suppression = degraded_mode_state == degradedModeState.signal_suppression
+bool hard_blocker = signal_suppression or hard_structural_invalidation or no_valid_sl_tp_geometry or expired_setup_window or profile_disallows_entry
+
+entryMode entry_mode = entryMode.disabled
+bool aggressive_ok = thesis_quality >= aggressive_min_thesis and location_quality >= aggressive_min_location and execution_quality >= aggressive_min_execution and setup_quality >= aggressive_min_setup and penalties_total == 0 and basic_liquidity_state == basicLiquidityState.none and degraded_mode_state == degradedModeState.none
+bool standard_ok = thesis_quality >= min_thesis_quality and location_quality >= min_location_quality and execution_quality >= min_execution_quality and setup_quality >= min_setup_quality and penalties_total <= standard_penalty_limit and (basic_liquidity_state == basicLiquidityState.none or basic_liquidity_state == basicLiquidityState.sweep_context) and degraded_mode_state != degradedModeState.signal_suppression
+bool reclaim_ok = basic_liquidity_state == basicLiquidityState.reclaim_needed and thesis_quality >= reclaim_min_thesis and location_quality >= reclaim_min_location and execution_quality >= reclaim_min_execution and setup_quality >= reclaim_min_setup and not hard_blocker
+
+if aggressive_ok
+    entry_mode := entryMode.aggressive
+else if standard_ok
+    entry_mode := entryMode.standard
+else if reclaim_ok
+    entry_mode := entryMode.reclaim
+
+// =====================================================
+// WAIT_RECLAIM_FLOW (2A v1.1)
+// =====================================================
+var bool wait_reclaim_active = false
+var int wait_reclaim_start_bar = na
+var float wait_reclaim_level = na
+
+float _default_reclaim_level = e2a_focus_long ? nz(lastSwingLow, close) : nz(lastSwingHigh, close)
+float _swept_level = e2a_focus_long ? nz(bullSweptLevel, _default_reclaim_level) : nz(bearSweptLevel, _default_reclaim_level)
+bool wait_reclaim_confirmed = e2a_focus_long ? (close > wait_reclaim_level and close[1] <= wait_reclaim_level) : (close < wait_reclaim_level and close[1] >= wait_reclaim_level)
+bool wait_reclaim_setup_ok = execution_quality >= reclaim_min_execution and setup_quality >= reclaim_min_setup
+bool wait_reclaim_expired = wait_reclaim_active and not na(wait_reclaim_start_bar) and bar_index - wait_reclaim_start_bar >= wait_reclaim_max_bars
+
+// =====================================================
+// FINAL_DECISION_GATE (2A v1.1)
+// =====================================================
+var decisionAction decision_action = decisionAction.DELAY
+bool e2a_closed_1m_bar = barstate.isconfirmed and timeframe.isminutes and timeframe.multiplier == 1
+
+if e2a_closed_1m_bar
+    if hard_blocker
+        decision_action := decisionAction.CANCEL
+        wait_reclaim_active := false
+        wait_reclaim_start_bar := na
+        wait_reclaim_level := na
+    else if wait_reclaim_active
+        if hard_blocker or wait_reclaim_expired
+            decision_action := decisionAction.CANCEL
+            wait_reclaim_active := false
+            wait_reclaim_start_bar := na
+            wait_reclaim_level := na
+        else if basic_liquidity_state == basicLiquidityState.reclaim_needed and wait_reclaim_confirmed and wait_reclaim_setup_ok
+            decision_action := decisionAction.ENTER_NOW
+            wait_reclaim_active := false
+            wait_reclaim_start_bar := na
+            wait_reclaim_level := na
+        else
+            decision_action := decisionAction.WAIT_RECLAIM
+    else
+        if entry_mode == entryMode.reclaim and basic_liquidity_state == basicLiquidityState.reclaim_needed
+            decision_action := decisionAction.WAIT_RECLAIM
+            wait_reclaim_active := true
+            wait_reclaim_start_bar := bar_index
+            wait_reclaim_level := _swept_level
+        else if entry_mode == entryMode.aggressive or entry_mode == entryMode.standard
+            decision_action := decisionAction.ENTER_NOW
+        else if basic_liquidity_state == basicLiquidityState.hard_invalidation
+            decision_action := decisionAction.CANCEL
+        else
+            decision_action := decisionAction.DELAY
 
 // =====================================================
 // POSITION / LEVELS / MANAGEMENT
