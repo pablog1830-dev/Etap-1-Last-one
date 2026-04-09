@@ -2541,6 +2541,99 @@ penalties_total := math.min(penalties_total, 26.0)
 float setup_quality = math.max(0.0, math.min(thesis_quality, location_quality, execution_quality) - penalties_total)
 
 // =====================================================
+// ENTRY_MODE_RESOLVER (2A v1.1)
+// =====================================================
+bool is_btc_profile = market_profile == E2A_PROFILE_BTC
+float min_thesis_quality = is_btc_profile ? 62.0 : 62.0
+float min_location_quality = is_btc_profile ? 58.0 : 60.0
+float min_execution_quality = is_btc_profile ? 58.0 : 60.0
+float min_setup_quality = is_btc_profile ? 55.0 : 54.0
+float aggressive_min_thesis = is_btc_profile ? 75.0 : 76.0
+float aggressive_min_location = is_btc_profile ? 70.0 : 72.0
+float aggressive_min_execution = is_btc_profile ? 68.0 : 70.0
+float aggressive_min_setup = is_btc_profile ? 60.0 : 62.0
+float reclaim_min_thesis = 60.0
+float reclaim_min_location = is_btc_profile ? 60.0 : 61.0
+float reclaim_min_execution = is_btc_profile ? 58.0 : 60.0
+float reclaim_min_setup = is_btc_profile ? 54.0 : 52.0
+float standard_penalty_limit = 16.0
+int wait_reclaim_max_bars = 3
+int expired_setup_window_bars = 3
+float penalty_cap_profile = is_btc_profile ? 26.0 : 28.0
+penalties_total := math.min(penalties_total, penalty_cap_profile)
+
+string _ticker_upper = str.upper(syminfo.ticker)
+bool profile_disallows_entry = (market_profile == E2A_PROFILE_BTC and not str.contains(_ticker_upper, "BTCUSDT")) or (market_profile == E2A_PROFILE_ETH and not str.contains(_ticker_upper, "ETHUSDT"))
+bool hard_structural_invalidation = e2a_hard_structural_invalidation
+bool no_valid_sl_tp_geometry = e2a_focus_long ? (na(bullSetupRef) or (na(lastSwingLow) and not selBullActive)) : (na(bearSetupRef) or (na(lastSwingHigh) and not selBearActive))
+bool expired_setup_window = e2a_focus_long ? (bullSetupLive and not na(bullSetupBar) and bar_index - bullSetupBar > expired_setup_window_bars) : (bearSetupLive and not na(bearSetupBar) and bar_index - bearSetupBar > expired_setup_window_bars)
+bool signal_suppression = degraded_mode_state == degradedModeState.signal_suppression
+bool hard_blocker = signal_suppression or hard_structural_invalidation or no_valid_sl_tp_geometry or expired_setup_window or profile_disallows_entry
+
+entryMode entry_mode = entryMode.disabled
+bool aggressive_ok = thesis_quality >= aggressive_min_thesis and location_quality >= aggressive_min_location and execution_quality >= aggressive_min_execution and setup_quality >= aggressive_min_setup and penalties_total == 0 and basic_liquidity_state == basicLiquidityState.none and degraded_mode_state == degradedModeState.none
+bool standard_ok = thesis_quality >= min_thesis_quality and location_quality >= min_location_quality and execution_quality >= min_execution_quality and setup_quality >= min_setup_quality and penalties_total <= standard_penalty_limit and (basic_liquidity_state == basicLiquidityState.none or basic_liquidity_state == basicLiquidityState.sweep_context) and degraded_mode_state != degradedModeState.signal_suppression
+bool reclaim_ok = basic_liquidity_state == basicLiquidityState.reclaim_needed and thesis_quality >= reclaim_min_thesis and location_quality >= reclaim_min_location and execution_quality >= reclaim_min_execution and setup_quality >= reclaim_min_setup and not hard_blocker
+
+if aggressive_ok
+    entry_mode := entryMode.aggressive
+else if standard_ok
+    entry_mode := entryMode.standard
+else if reclaim_ok
+    entry_mode := entryMode.reclaim
+
+// =====================================================
+// WAIT_RECLAIM_FLOW (2A v1.1)
+// =====================================================
+var bool wait_reclaim_active = false
+var int wait_reclaim_start_bar = na
+var float wait_reclaim_level = na
+
+float _default_reclaim_level = e2a_focus_long ? nz(lastSwingLow, close) : nz(lastSwingHigh, close)
+float _swept_level = e2a_focus_long ? nz(bullSweptLevel, _default_reclaim_level) : nz(bearSweptLevel, _default_reclaim_level)
+bool wait_reclaim_confirmed = e2a_focus_long ? (close > wait_reclaim_level and close[1] <= wait_reclaim_level) : (close < wait_reclaim_level and close[1] >= wait_reclaim_level)
+bool wait_reclaim_setup_ok = execution_quality >= reclaim_min_execution and setup_quality >= reclaim_min_setup
+bool wait_reclaim_expired = wait_reclaim_active and not na(wait_reclaim_start_bar) and bar_index - wait_reclaim_start_bar >= wait_reclaim_max_bars
+
+// =====================================================
+// FINAL_DECISION_GATE (2A v1.1)
+// =====================================================
+var decisionAction decision_action = decisionAction.DELAY
+bool e2a_closed_1m_bar = barstate.isconfirmed and timeframe.isminutes and timeframe.multiplier == 1
+
+if e2a_closed_1m_bar
+    if hard_blocker
+        decision_action := decisionAction.CANCEL
+        wait_reclaim_active := false
+        wait_reclaim_start_bar := na
+        wait_reclaim_level := na
+    else if wait_reclaim_active
+        if hard_blocker or wait_reclaim_expired
+            decision_action := decisionAction.CANCEL
+            wait_reclaim_active := false
+            wait_reclaim_start_bar := na
+            wait_reclaim_level := na
+        else if basic_liquidity_state == basicLiquidityState.reclaim_needed and wait_reclaim_confirmed and wait_reclaim_setup_ok
+            decision_action := decisionAction.ENTER_NOW
+            wait_reclaim_active := false
+            wait_reclaim_start_bar := na
+            wait_reclaim_level := na
+        else
+            decision_action := decisionAction.WAIT_RECLAIM
+    else
+        if entry_mode == entryMode.reclaim and basic_liquidity_state == basicLiquidityState.reclaim_needed
+            decision_action := decisionAction.WAIT_RECLAIM
+            wait_reclaim_active := true
+            wait_reclaim_start_bar := bar_index
+            wait_reclaim_level := _swept_level
+        else if entry_mode == entryMode.aggressive or entry_mode == entryMode.standard
+            decision_action := decisionAction.ENTER_NOW
+        else if basic_liquidity_state == basicLiquidityState.hard_invalidation
+            decision_action := decisionAction.CANCEL
+        else
+            decision_action := decisionAction.DELAY
+
+// =====================================================
 // POSITION / LEVELS / MANAGEMENT
 // =====================================================
 var bool posActive = false
